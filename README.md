@@ -29,7 +29,7 @@ JSON file without touching anything else.
   `logs/cooldown-state.json` (atomic writes, mtime-based reload), so main
   sessions and subagent processes see each other's failures
 - **Footer status**: a status-bar indicator lists every target currently on
-  cooldown (refreshed every 5 s), hidden when there is nothing to show
+  cooldown (refreshed every 30 s), hidden when there is nothing to show
 - **Transcript warnings**: failovers and cooldown resets append durable
   entries to the chat transcript (rendered, expandable, never sent to the
   LLM) instead of transient popups

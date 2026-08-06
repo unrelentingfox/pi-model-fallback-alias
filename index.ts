@@ -19,7 +19,7 @@ export { renderStatusTick, startSession } from "./session-status.ts";
 export type { AliasSessionContext, RenderStatusTickOptions } from "./session-status.ts";
 
 const PROVIDER_ID = "alias";
-const STATUS_REFRESH_INTERVAL_MS = 5_000;
+const STATUS_REFRESH_INTERVAL_MS = 30_000;
 const DEBUG_LOG = createDebugLog();
 const TARGET_COOLDOWNS = createSharedCooldownRegistry({ debugLog: DEBUG_LOG });
 
