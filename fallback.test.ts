@@ -527,6 +527,19 @@ test("rejects alias targets to guard against cycles", () => {
 	);
 });
 
+test("in-memory clearAll wipes everything but counts only active cooldowns", () => {
+	let currentTime = 0;
+	const cooldowns = createCooldownRegistry(() => currentTime);
+	cooldowns.recordFailure("provider/expired");
+	currentTime = 60_000;
+	cooldowns.recordFailure("provider/active");
+
+	assert.equal(cooldowns.clearAll(), 1);
+
+	assert.equal(cooldowns.state("provider/expired"), undefined);
+	assert.equal(cooldowns.state("provider/active"), undefined);
+});
+
 async function* events(...source: FakeEvent[]): AsyncGenerator<FakeEvent> {
 	yield* source;
 }

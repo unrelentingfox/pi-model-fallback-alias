@@ -13,6 +13,7 @@ export interface CooldownRegistry {
 	isActive(target: string): boolean;
 	recordFailure(target: string): CooldownUpdate;
 	reset(target: string): void;
+	clearAll(): number;
 	state(target: string): CooldownState | undefined;
 }
 
@@ -60,9 +61,9 @@ interface FallbackOptions<Event extends StreamEventLike> {
 	snapshot?(event: Event): Event;
 }
 
-const COOLDOWN_BASE_MS = 30_000;
-const COOLDOWN_CAP_MS = 30 * 60_000;
-const MAX_UNCAPPED_EXPONENT = 6;
+export const COOLDOWN_BASE_MS = 30_000;
+export const COOLDOWN_CAP_MS = 30 * 60_000;
+export const MAX_UNCAPPED_EXPONENT = 6;
 
 export function createCooldownRegistry(now: () => number = Date.now): CooldownRegistry {
 	const entries = new Map<string, CooldownState>();
@@ -72,21 +73,31 @@ export function createCooldownRegistry(now: () => number = Date.now): CooldownRe
 			return entry !== undefined && entry.nextRetryAt > now();
 		},
 		recordFailure(target) {
-			const failCount = (entries.get(target)?.failCount ?? 0) + 1;
-			const exponent = Math.min(failCount - 1, MAX_UNCAPPED_EXPONENT);
-			const durationMs = Math.min(COOLDOWN_BASE_MS * 2 ** exponent, COOLDOWN_CAP_MS);
-			const state = { failCount, nextRetryAt: now() + durationMs };
-			entries.set(target, state);
-			return { ...state, durationMs };
+			const update = nextCooldown(entries.get(target), now());
+			entries.set(target, { failCount: update.failCount, nextRetryAt: update.nextRetryAt });
+			return update;
 		},
 		reset(target) {
 			entries.delete(target);
+		},
+		clearAll() {
+			const nowMs = now();
+			const clearedCount = [...entries.values()].filter((entry) => entry.nextRetryAt > nowMs).length;
+			entries.clear();
+			return clearedCount;
 		},
 		state(target) {
 			const entry = entries.get(target);
 			return entry ? { ...entry } : undefined;
 		},
 	};
+}
+
+export function nextCooldown(previous: CooldownState | undefined, now: number): CooldownUpdate {
+	const failCount = (previous?.failCount ?? 0) + 1;
+	const exponent = Math.min(failCount - 1, MAX_UNCAPPED_EXPONENT);
+	const durationMs = Math.min(COOLDOWN_BASE_MS * 2 ** exponent, COOLDOWN_CAP_MS);
+	return { failCount, nextRetryAt: now + durationMs, durationMs };
 }
 
 export function parseAliasMap(value: unknown): Map<string, readonly string[]> {

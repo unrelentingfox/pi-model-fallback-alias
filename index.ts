@@ -16,9 +16,11 @@ import {
 	type StreamOptions,
 } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { ALIAS_API_ID, registerAliasApiProvider } from "./api-registration.ts";
+import { createSharedCooldownRegistry } from "./cooldown-store.ts";
+import { createDebugLog } from "./debug-log.ts";
 import {
-	createCooldownRegistry,
 	describeFailure,
 	failureStopReason,
 	parseAliasMap,
@@ -27,27 +29,75 @@ import {
 	runFallbackChain,
 	type AliasMap,
 } from "./fallback.ts";
+import {
+	renderStatusTick,
+	startSession,
+	type AliasSession as StatusSession,
+} from "./session-status.ts";
+import { formatDuration, formatFailoverWarning } from "./status.ts";
+
+export { renderStatusTick, startSession } from "./session-status.ts";
+export type { AliasSessionContext, RenderStatusTickOptions } from "./session-status.ts";
 
 const PROVIDER_ID = "alias";
+const FAILOVER_ENTRY = "model-alias-failover";
+const RESET_ENTRY = "model-alias-reset";
 const DEFAULT_MAP_PATH = join(getAgentDir(), "model-alias.json");
 const MAP_PATH = process.env.PI_MODEL_ALIAS_MAP || DEFAULT_MAP_PATH;
 const PLACEHOLDER_CONTEXT_WINDOW = 1_000_000;
 const PLACEHOLDER_MAX_TOKENS = 262_144;
+const STATUS_REFRESH_INTERVAL_MS = 5_000;
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-const TARGET_COOLDOWNS = createCooldownRegistry();
+const DEBUG_LOG = createDebugLog();
+const TARGET_COOLDOWNS = createSharedCooldownRegistry({ debugLog: DEBUG_LOG });
 
 type Registry = ExtensionContext["modelRegistry"];
+type SessionUi = ExtensionContext["ui"];
 type ResolvedAuth = { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> };
 type StreamKind = keyof Pick<ProviderStreams, "stream" | "streamSimple">;
 
+export type AliasSession = StatusSession<Registry, SessionUi>;
+
+interface FailoverEntryData {
+	role: string;
+	failedTarget: string;
+	nextTarget?: string;
+	reason: string;
+	cooldownMs: number;
+	failCount: number;
+	timestamp: number;
+}
+
 export default function piModelAlias(pi: ExtensionAPI): void {
 	const aliases = loadAliases();
+	DEBUG_LOG.log("extension-load", { mapPath: MAP_PATH, aliases: [...aliases.keys()] });
 	if (aliases.size === 0) return;
 
-	let registry: Registry | undefined;
+	const session: AliasSession = {
+		registry: undefined,
+		ui: undefined,
+		hasUI: false,
+	};
+	let lastPushedText: string | undefined;
+	const publishStatus = () => {
+		try {
+			lastPushedText = renderStatusTick({
+				aliases,
+				session,
+				lastPushedText,
+				cooldowns: TARGET_COOLDOWNS,
+				debugLog: DEBUG_LOG,
+			});
+		} catch (error) {
+			DEBUG_LOG.log("ui-error", { operation: "status-tick", message: describeFailure(error) });
+		}
+	};
+	const statusRefreshInterval = setInterval(publishStatus, STATUS_REFRESH_INTERVAL_MS);
+	statusRefreshInterval.unref?.();
 	const aliasModels = [...aliases.keys()].map(aliasModel);
-	const streams = createAliasStreams(aliases, aliasModels, () => registry);
+	const streams = createAliasStreams(aliases, aliasModels, pi, session);
 	void registerAliasApiProvider(streams);
+	registerFailoverRenderer(pi);
 
 	pi.registerProvider(
 		createProvider({
@@ -70,25 +120,35 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	);
 
 	pi.on("session_start", (_event, ctx) => {
-		registry = ctx.modelRegistry;
-		initializeAliasMetadata(aliases, aliasModels, registry);
+		if (startSession(session, ctx, DEBUG_LOG)) {
+			lastPushedText = undefined;
+			publishStatus();
+		}
+		initializeAliasMetadata(aliases, aliasModels, ctx.modelRegistry);
 	});
-	pi.on("session_shutdown", () => {
-		registry = undefined;
+
+	pi.registerCommand("reset-model-cooldown", {
+		description: "Clear all model-alias target cooldowns",
+		handler: async () => {
+			const clearedCount = TARGET_COOLDOWNS.clearAll();
+			publishStatus();
+			pi.appendEntry(RESET_ENTRY, { clearedCount });
+		},
 	});
 }
 
 function createAliasStreams(
 	aliases: AliasMap,
 	aliasModels: Model<Api>[],
-	getRegistry: () => Registry | undefined,
+	pi: ExtensionAPI,
+	session: AliasSession,
 ): ProviderStreams {
 	return {
 		stream(model, context, options) {
-			return createFallbackStream("stream", model, context, options, aliases, aliasModels, getRegistry);
+			return createFallbackStream("stream", model, context, options, aliases, aliasModels, pi, session);
 		},
 		streamSimple(model, context, options) {
-			return createFallbackStream("streamSimple", model, context, options, aliases, aliasModels, getRegistry);
+			return createFallbackStream("streamSimple", model, context, options, aliases, aliasModels, pi, session);
 		},
 	};
 }
@@ -100,27 +160,57 @@ function createFallbackStream(
 	options: StreamOptions | SimpleStreamOptions | undefined,
 	aliases: AliasMap,
 	aliasModels: Model<Api>[],
-	getRegistry: () => Registry | undefined,
+	pi: ExtensionAPI,
+	session: AliasSession,
 ): AssistantMessageEventStream {
 	const output = createAssistantMessageEventStream();
+	const registry = session.registry;
+	if (!registry) {
+		const error = new Error(`Model alias "${aliasModel.id}" cannot stream before a session starts in this process`);
+		DEBUG_LOG.log("open-attempt", { role: aliasModel.id, ok: false, reason: error.message });
+		endWithError(output, aliasModel, error, undefined, options?.signal);
+		return output;
+	}
+	const targets = targetsFor(aliasModel, aliases);
 	let lastPartial: AssistantMessage | undefined;
 
 	void runFallbackChain({
 		role: aliasModel.id,
-		targets: targetsFor(aliasModel, aliases),
+		targets,
 		cooldowns: TARGET_COOLDOWNS,
 		signal: options?.signal,
 		open: async (targetRef) => {
-			const target = await resolveAuthenticatedTarget(aliasModel.id, targetRef, getRegistry());
-			mirrorTargetMetadata(aliasModel, aliasModels, target.model);
-			return openTargetStream(kind, target, context, options);
+			try {
+				const target = await resolveAuthenticatedTarget(aliasModel.id, targetRef, registry);
+				mirrorTargetMetadata(aliasModel, aliasModels, target.model);
+				const stream = openTargetStream(kind, target, context, options);
+				DEBUG_LOG.log("open-attempt", { role: aliasModel.id, targetRef, ok: true });
+				return stream;
+			} catch (error) {
+				DEBUG_LOG.log("open-attempt", {
+					role: aliasModel.id,
+					targetRef,
+					ok: false,
+					reason: describeFailure(error),
+				});
+				throw error;
+			}
 		},
 		forward: (event) => {
 			lastPartial = partialFrom(event) ?? lastPartial;
 			output.push(event);
 		},
 		warn: (failedTarget, reason, nextTarget, cooldown) =>
-			warnFailover(aliasModel.id, failedTarget, reason, nextTarget, cooldown.durationMs, cooldown.failCount),
+			warnFailover(
+				pi,
+				session,
+				aliasModel.id,
+				failedTarget,
+				reason,
+				nextTarget,
+				cooldown.durationMs,
+				cooldown.failCount,
+			),
 		// Pi treats a restart as a second assistant message, so safe prefixes stay hidden until commit.
 		snapshot: (event) => structuredClone(event),
 	})
@@ -142,8 +232,7 @@ function initializeAliasMetadata(aliases: AliasMap, aliasModels: Model<Api>[], r
 	}
 }
 
-async function resolveAuthenticatedTarget(aliasId: string, targetRef: string, registry: Registry | undefined) {
-	if (!registry) throw new Error(`Model alias "${aliasId}" cannot resolve "${targetRef}" before session start`);
+async function resolveAuthenticatedTarget(aliasId: string, targetRef: string, registry: Registry) {
 	const target = resolveTargetReference(aliasId, targetRef, registry);
 	const auth = await registry.getApiKeyAndHeaders(target.model);
 	if (!auth.ok) {
@@ -171,22 +260,69 @@ function targetsFor(aliasModel: Model<Api>, aliases: AliasMap): readonly string[
 }
 
 function warnFailover(
+	pi: ExtensionAPI,
+	session: AliasSession,
 	role: string,
 	failedTarget: string,
 	reason: string,
 	nextTarget: string | undefined,
-	durationMs: number,
+	cooldownMs: number,
 	failCount: number,
 ): void {
-	const retry = nextTarget ? `; trying "${nextTarget}"` : "";
-	console.warn(
-		`[pi-model-alias] Alias "${role}" target "${failedTarget}" failed: ${reason}; cooldown ${formatDuration(durationMs)} (failCount=${failCount})${retry}`,
-	);
+	const data: FailoverEntryData = {
+		role,
+		failedTarget,
+		...(nextTarget ? { nextTarget } : {}),
+		reason,
+		cooldownMs,
+		failCount,
+		timestamp: Date.now(),
+	};
+	DEBUG_LOG.log("failover-warn", { ...data });
+	// In TUI mode the transcript entry is the log; raw stderr would draw over the UI.
+	if (!session.hasUI) console.warn(`[pi-model-alias] ${formatFailoverWarning(data)}`);
+	try {
+		pi.appendEntry<FailoverEntryData>(FAILOVER_ENTRY, data);
+	} catch (error) {
+		DEBUG_LOG.log("append-entry-error", { message: describeFailure(error) });
+	}
 }
 
-function formatDuration(durationMs: number): string {
-	if (durationMs < 60_000) return `${durationMs / 1_000}s`;
-	return `${durationMs / 60_000}m`;
+function registerFailoverRenderer(pi: ExtensionAPI): void {
+	pi.registerEntryRenderer<{ clearedCount?: number }>(RESET_ENTRY, (entry, _opts, theme) => {
+		const clearedCount = finiteNumber(entry.data?.clearedCount);
+		return new Text(theme.fg("dim", `[model-alias] Cleared ${clearedCount} model cooldown(s)`), 0, 0);
+	});
+	pi.registerEntryRenderer<Partial<FailoverEntryData>>(FAILOVER_ENTRY, (entry, { expanded }, theme) => {
+		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+		const data = entry.data;
+		if (!data) {
+			box.addChild(new Text(theme.fg("warning", "[model-alias] Missing failover details"), 0, 0));
+			return box;
+		}
+
+		const warning = formatFailoverWarning(data);
+		box.addChild(new Text(`${theme.fg("warning", "[model-alias]")} ${warning}`, 0, 0));
+		if (expanded) {
+			box.addChild(new Text(`${theme.fg("dim", "Reason:")} ${data.reason ?? ""}`, 0, 0));
+			box.addChild(
+				new Text(
+					theme.fg(
+						"dim",
+						`Cooldown: ${formatDuration(data.cooldownMs)}; failure ${finiteNumber(data.failCount)}`,
+					),
+					0,
+					0,
+				),
+			);
+			box.addChild(new Text(theme.fg("dim", new Date(finiteNumber(data.timestamp)).toLocaleString()), 0, 0));
+		}
+		return box;
+	});
+}
+
+function finiteNumber(value: number | undefined): number {
+	return Number.isFinite(value) ? (value as number) : 0;
 }
 
 function endWithError(
@@ -289,6 +425,7 @@ function loadAliases(): Map<string, readonly string[]> {
 	try {
 		return parseAliasMap(JSON.parse(readFileSync(MAP_PATH, "utf8")) as unknown);
 	} catch (error) {
+		DEBUG_LOG.log("alias-map-error", { mapPath: MAP_PATH, message: describeFailure(error) });
 		console.warn(`[pi-model-alias] No aliases registered; could not read ${MAP_PATH}: ${describeFailure(error)}`);
 		return new Map();
 	}
