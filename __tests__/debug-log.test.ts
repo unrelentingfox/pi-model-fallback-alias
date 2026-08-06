@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDebugLog } from "./debug-log.ts";
+import { createDebugLog } from "../debug-log.ts";
 
 const FIXED_DATE = new Date("2026-03-20T12:34:56.000Z");
 

@@ -5,7 +5,7 @@ import {
 	startSession,
 	type AliasSession,
 	type AliasSessionContext,
-} from "./session-status.ts";
+} from "../session-status.ts";
 
 const NOOP_DEBUG_LOG = { log() {} };
 

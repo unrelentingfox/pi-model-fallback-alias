@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatCooldownStatus, formatDuration, formatFailoverWarning, shortModelLabel } from "./status.ts";
+import { formatCooldownStatus, formatDuration, formatFailoverWarning, shortModelLabel } from "../status.ts";
 
 const modelLabelExamples = [
 	["amazon-bedrock/model-primary", "opus-4-8"],
