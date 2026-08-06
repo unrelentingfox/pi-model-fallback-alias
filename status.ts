@@ -42,10 +42,10 @@ export function formatDuration(ms: number | undefined): string {
 	return `${Math.ceil(durationMs / 60_000)}m`;
 }
 
-function oneLine(value: string | undefined): string {
-	return (value ?? "").replace(/\s+/gu, " ").trim();
+export function finiteNumber(value: number | undefined): number {
+	return Number.isFinite(value) ? (value as number) : 0;
 }
 
-function finiteNumber(value: number | undefined): number {
-	return Number.isFinite(value) ? (value as number) : 0;
+function oneLine(value: string | undefined): string {
+	return (value ?? "").replace(/\s+/gu, " ").trim();
 }

@@ -1,5 +1,15 @@
 export type AliasMap = ReadonlyMap<string, readonly string[]>;
 
+export interface FailoverEntryData {
+	role: string;
+	failedTarget: string;
+	nextTarget?: string;
+	reason: string;
+	cooldownMs: number;
+	failCount: number;
+	timestamp: number;
+}
+
 export interface CooldownState {
 	failCount: number;
 	nextRetryAt: number;
