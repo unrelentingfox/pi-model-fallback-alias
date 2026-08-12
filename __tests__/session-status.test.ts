@@ -9,15 +9,15 @@ import {
 
 const NOOP_DEBUG_LOG = { log() {} };
 
-function createUi() {
+function createUi(showColors = false) {
 	const statuses: Array<string | undefined> = [];
 	const ui = {
 		setStatus(_key: string, value: string | undefined) {
 			statuses.push(value);
 		},
 		theme: {
-			fg(_color: string, text: string) {
-				return text;
+			fg(color: string, text: string) {
+				return showColors ? `[${color}]${text}` : text;
 			},
 		},
 	};
@@ -25,7 +25,13 @@ function createUi() {
 }
 
 function createSession(): AliasSession {
-	return { registry: undefined, ui: undefined, hasUI: false };
+	return {
+		registry: undefined,
+		ui: undefined,
+		hasUI: false,
+		model: undefined,
+		activeTargets: new Map(),
+	};
 }
 
 function createContext(hasUI: boolean, ui: AliasSessionContext["ui"], registry: object): AliasSessionContext {
@@ -60,6 +66,162 @@ describe("alias session ownership", () => {
 });
 
 describe("renderStatusTick", () => {
+	it("prefers the recorded target over the configured chain", () => {
+		const session = createSession();
+		const captured = createUi();
+		startSession(session, createContext(true, captured.ui, {}), NOOP_DEBUG_LOG);
+		session.model = { provider: "alias", id: "fast" };
+		session.activeTargets.set("fast", "provider/recorded");
+
+		const text = renderStatusTick({
+			aliases: new Map([["fast", ["provider/primary"]]]),
+			session,
+			lastPushedText: undefined,
+			now: 1_000,
+			cooldowns: { state: () => undefined },
+			debugLog: NOOP_DEBUG_LOG,
+		});
+
+		assert.equal(text, "recorded");
+		assert.equal(captured.statuses.at(-1), "recorded");
+	});
+
+	it("updates the recorded target after failover", () => {
+		const session = createSession();
+		const captured = createUi(true);
+		startSession(session, createContext(true, captured.ui, {}), NOOP_DEBUG_LOG);
+		session.model = { provider: "alias", id: "fast" };
+		session.activeTargets.set("fast", "provider/primary");
+		const aliases = new Map([["fast", ["provider/primary", "provider/fallback"]]]);
+		const cooldowns = {
+			state: (targetRef: string) =>
+				targetRef === "provider/primary" ? { failCount: 1, nextRetryAt: 61_000 } : undefined,
+		};
+
+		const firstText = renderStatusTick({
+			aliases,
+			session,
+			lastPushedText: undefined,
+			now: 1_000,
+			cooldowns: { state: () => undefined },
+			debugLog: NOOP_DEBUG_LOG,
+		});
+		session.activeTargets.set("fast", "provider/fallback");
+		const failoverText = renderStatusTick({
+			aliases,
+			session,
+			lastPushedText: firstText,
+			now: 1_000,
+			cooldowns,
+			debugLog: NOOP_DEBUG_LOG,
+		});
+
+		assert.equal(firstText, "primary");
+		assert.equal(failoverText, "fallback · cooldown: primary 1m");
+		assert.equal(captured.statuses.at(-1), "[muted]fallback · [warning]cooldown: primary 1m");
+	});
+
+	it("renders the next target while the failed target cools", () => {
+		const session = createSession();
+		const captured = createUi();
+		startSession(session, createContext(true, captured.ui, {}), NOOP_DEBUG_LOG);
+		session.model = { provider: "alias", id: "fast" };
+		session.activeTargets.set("fast", "provider/fable-5");
+		const aliases = new Map([["fast", ["provider/fable-5", "provider/opus-5"]]]);
+
+		session.activeTargets.set("fast", "provider/opus-5");
+		const text = renderStatusTick({
+			aliases,
+			session,
+			lastPushedText: undefined,
+			now: 1_000,
+			cooldowns: {
+				state: (targetRef: string) =>
+					targetRef === "provider/fable-5" ? { failCount: 1, nextRetryAt: 31_000 } : undefined,
+			},
+			debugLog: NOOP_DEBUG_LOG,
+		});
+
+		assert.equal(text, "opus-5 · cooldown: fable-5 30s");
+		assert.notEqual(text, "fable-5 · cooldown: fable-5 30s");
+	});
+
+	it("skips a cooled primary when no target has been recorded", () => {
+		const session = createSession();
+		const captured = createUi();
+		startSession(session, createContext(true, captured.ui, {}), NOOP_DEBUG_LOG);
+		session.model = { provider: "alias", id: "fast" };
+
+		const text = renderStatusTick({
+			aliases: new Map([["fast", ["provider/primary", "provider/healthy"]]]),
+			session,
+			lastPushedText: undefined,
+			now: 1_000,
+			cooldowns: {
+				state: (targetRef) =>
+					targetRef === "provider/primary" ? { failCount: 1, nextRetryAt: 61_000 } : undefined,
+			},
+			debugLog: NOOP_DEBUG_LOG,
+		});
+
+		assert.equal(text, "healthy · cooldown: primary 1m");
+	});
+
+	it("shows the primary when the entire chain is cooling", () => {
+		const session = createSession();
+		const captured = createUi();
+		startSession(session, createContext(true, captured.ui, {}), NOOP_DEBUG_LOG);
+		session.model = { provider: "alias", id: "fast" };
+
+		const text = renderStatusTick({
+			aliases: new Map([["fast", ["provider/primary", "provider/secondary"]]]),
+			session,
+			lastPushedText: undefined,
+			now: 1_000,
+			cooldowns: { state: () => ({ failCount: 1, nextRetryAt: 61_000 }) },
+			debugLog: NOOP_DEBUG_LOG,
+		});
+
+		assert.equal(text, "primary · cooldown: primary 1m, secondary 1m");
+	});
+
+	it("omits the model segment for a non-alias session model", () => {
+		const session = createSession();
+		const captured = createUi();
+		startSession(session, createContext(true, captured.ui, {}), NOOP_DEBUG_LOG);
+		session.model = { provider: "provider", id: "fast" };
+		session.activeTargets.set("fast", "provider/recorded");
+
+		const text = renderStatusTick({
+			aliases: new Map([["fast", ["provider/primary"]]]),
+			session,
+			lastPushedText: undefined,
+			now: 1_000,
+			cooldowns: { state: () => ({ failCount: 1, nextRetryAt: 61_000 }) },
+			debugLog: NOOP_DEBUG_LOG,
+		});
+
+		assert.equal(text, "cooldown: primary 1m");
+	});
+
+	it("keeps the footer hidden without an alias session model or cooldowns", () => {
+		const session = createSession();
+		const captured = createUi();
+		startSession(session, createContext(true, captured.ui, {}), NOOP_DEBUG_LOG);
+
+		const text = renderStatusTick({
+			aliases: new Map([["fast", ["provider/primary"]]]),
+			session,
+			lastPushedText: undefined,
+			now: 1_000,
+			cooldowns: { state: () => undefined },
+			debugLog: NOOP_DEBUG_LOG,
+		});
+
+		assert.equal(text, undefined);
+		assert.deepEqual(captured.statuses, [undefined]);
+	});
+
 	it("publishes changed cooldown text and skips unchanged text", () => {
 		const session = createSession();
 		const captured = createUi();

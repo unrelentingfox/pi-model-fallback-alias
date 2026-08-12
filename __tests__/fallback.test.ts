@@ -84,6 +84,123 @@ test("parses string and ordered array mappings", () => {
 	]);
 });
 
+test("expands a nested alias in place", () => {
+	const aliases = parseAliasMap({
+		coder: ["provider/first", "alias/fallback", "provider/last"],
+		fallback: ["provider/second", "provider/third"],
+	});
+
+	assert.deepEqual(aliases.get("coder"), [
+		"provider/first",
+		"provider/second",
+		"provider/third",
+		"provider/last",
+	]);
+});
+
+test("expands multi-level nested aliases", () => {
+	const aliases = parseAliasMap({
+		a: "alias/b",
+		b: ["provider/b", "alias/c"],
+		c: "provider/c",
+	});
+
+	assert.deepEqual(aliases.get("a"), ["provider/b", "provider/c"]);
+});
+
+test("expands a diamond through its shared alias once", () => {
+	const aliases = parseAliasMap({
+		a: ["alias/b", "alias/c"],
+		b: ["p/1", "alias/d"],
+		c: ["p/2", "alias/d"],
+		d: ["p/3"],
+	});
+
+	assert.deepEqual(aliases.get("a"), ["p/1", "p/3", "p/2"]);
+});
+
+test("deduplicates expanded targets at their first position", () => {
+	const aliases = parseAliasMap({
+		coder: ["provider/one", "alias/shared", "provider/two"],
+		shared: ["provider/two", "provider/one", "provider/three"],
+	});
+
+	assert.deepEqual(aliases.get("coder"), ["provider/one", "provider/two", "provider/three"]);
+});
+
+test("deduplicates concrete targets in a flat chain", () => {
+	const aliases = parseAliasMap({ top: ["p/1", "p/2", "p/1"] });
+
+	assert.deepEqual(aliases.get("top"), ["p/1", "p/2"]);
+});
+
+test("rejects a self-referencing alias cycle", () => {
+	assert.throws(
+		() => parseAliasMap({ "coder-model": ["provider/model", "alias/coder-model"] }),
+		(error) =>
+			error instanceof Error &&
+			error.message === 'invalid mapping for "coder-model": alias cycle coder-model -> coder-model',
+	);
+});
+
+test("rejects a mutual alias cycle", () => {
+	assert.throws(
+		() => parseAliasMap({ a: "alias/b", b: "alias/a" }),
+		(error) => error instanceof Error && error.message === 'invalid mapping for "a": alias cycle a -> b -> a',
+	);
+});
+
+test("attributes a nested cycle to the role that owns it", () => {
+	assert.throws(
+		() =>
+			parseAliasMap({
+				r: "alias/x",
+				x: ["p/9", "alias/y"],
+				y: "alias/z",
+				z: "alias/x",
+			}),
+		(error) =>
+			error instanceof Error &&
+			error.message === 'invalid mapping for "x": alias cycle x -> y -> z -> x',
+	);
+});
+
+test("rejects an unknown nested alias", () => {
+	assert.throws(
+		() => parseAliasMap({ "coder-model": "alias/nope" }),
+		(error) =>
+			error instanceof Error &&
+			error.message === 'invalid mapping for "coder-model": unknown alias target "alias/nope"',
+	);
+});
+
+test("attributes a deeply nested unknown alias to its immediate role", () => {
+	assert.throws(
+		() => parseAliasMap({ r: "alias/x", x: "alias/y", y: ["p/1", "alias/ghost"] }),
+		(error) =>
+			error instanceof Error &&
+			error.message === 'invalid mapping for "y": unknown alias target "alias/ghost"',
+	);
+});
+
+test("expands a string-form nested alias", () => {
+	const aliases = parseAliasMap({ x: "alias/y", y: "provider/model" });
+
+	assert.deepEqual(aliases.get("x"), ["provider/model"]);
+});
+
+test("leaves a map without nested aliases unchanged", () => {
+	const aliases = parseAliasMap({
+		single: "provider/model",
+		chain: ["provider/first", "provider/second"],
+	});
+
+	assert.deepEqual([...aliases], [
+		["single", ["provider/model"]],
+		["chain", ["provider/first", "provider/second"]],
+	]);
+});
+
 test("rejects empty and invalid target arrays", () => {
 	assert.throws(() => parseAliasMap({ empty: [] }), /invalid mapping for "empty"/u);
 	assert.throws(() => parseAliasMap({ invalid: ["good/model", 4] }), /invalid mapping for "invalid"/u);

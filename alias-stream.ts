@@ -79,6 +79,7 @@ function createFallbackStream(
 				const target = await resolveAuthenticatedTarget(aliasModel.id, targetRef, registry);
 				mirrorTargetMetadata(aliasModel, aliasModels, target.model);
 				const stream = openTargetStream(kind, target, context, options);
+				session.activeTargets.set(aliasModel.id, targetRef);
 				debugLog.log("open-attempt", { role: aliasModel.id, targetRef, ok: true });
 				return stream;
 			} catch (error) {

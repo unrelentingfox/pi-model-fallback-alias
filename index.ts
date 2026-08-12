@@ -31,7 +31,13 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	DEBUG_LOG.log("extension-load", { mapPath: MAP_PATH, aliases: [...aliases.keys()] });
 	if (aliases.size === 0) return;
 
-	const session: AliasSession = { registry: undefined, ui: undefined, hasUI: false };
+	const session: AliasSession = {
+		registry: undefined,
+		ui: undefined,
+		hasUI: false,
+		model: undefined,
+		activeTargets: new Map(),
+	};
 	let lastPushedText: string | undefined;
 	const publishStatus = () => {
 		try {
@@ -57,8 +63,10 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 		cooldowns: TARGET_COOLDOWNS,
 		debugLog: DEBUG_LOG,
 		onFailover(data) {
+			if (data.nextTarget) session.activeTargets.set(data.role, data.nextTarget);
 			reportFailover(data, session, DEBUG_LOG);
 			appendFailoverEntry(pi, data, DEBUG_LOG);
+			publishStatus();
 		},
 	});
 	void registerAliasApiProvider(streams);
@@ -77,11 +85,19 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	}));
 
 	pi.on("session_start", (_event, ctx) => {
+		session.model = ctx.model;
 		if (startSession(session, ctx, DEBUG_LOG)) {
 			lastPushedText = undefined;
 			publishStatus();
 		}
 		initializeAliasMetadata(aliases, aliasModels, ctx.modelRegistry);
+	});
+
+	pi.on("model_select", (event, ctx) => {
+		session.model = event.model;
+		if (!ctx.hasUI) return;
+		lastPushedText = undefined;
+		publishStatus();
 	});
 
 	pi.registerCommand("reset-model-cooldown", {

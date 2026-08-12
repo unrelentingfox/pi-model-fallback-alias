@@ -117,7 +117,7 @@ export function parseAliasMap(value: unknown): Map<string, readonly string[]> {
 	for (const [role, configuredTargets] of Object.entries(value)) {
 		aliases.set(role, normalizeTargets(role, configuredTargets));
 	}
-	return aliases;
+	return expandNestedAliases(aliases);
 }
 
 export function resolveTargetReference<Model, Provider>(
@@ -325,6 +325,59 @@ function normalizeTargets(role: string, value: unknown): readonly string[] {
 		throw new Error(`invalid mapping for "${role}"`);
 	}
 	return targets;
+}
+
+function expandNestedAliases(aliases: Map<string, readonly string[]>): Map<string, readonly string[]> {
+	const expandedAliases = new Map<string, readonly string[]>();
+	const memo = new Map<string, readonly string[]>();
+	for (const role of aliases.keys()) {
+		expandedAliases.set(role, expandAlias(role, aliases, memo, []));
+	}
+	return expandedAliases;
+}
+
+function expandAlias(
+	role: string,
+	aliases: Map<string, readonly string[]>,
+	memo: Map<string, readonly string[]>,
+	path: readonly string[],
+): readonly string[] {
+	const memoized = memo.get(role);
+	if (memoized) return memoized;
+
+	const cycleStart = path.indexOf(role);
+	if (cycleStart >= 0) {
+		const cycle = [...path.slice(cycleStart), role].join(" -> ");
+		throw invalidAliasMapping(role, `alias cycle ${cycle}`);
+	}
+
+	const expandedTargets: string[] = [];
+	const seenTargets = new Set<string>();
+	for (const target of aliases.get(role)!) {
+		const [providerId, nestedRole] = splitModelRef(target);
+		if (providerId !== "alias") {
+			appendUnique(expandedTargets, seenTargets, target);
+			continue;
+		}
+		if (!aliases.has(nestedRole)) {
+			throw invalidAliasMapping(role, `unknown alias target "${target}"`);
+		}
+		for (const nestedTarget of expandAlias(nestedRole, aliases, memo, [...path, role])) {
+			appendUnique(expandedTargets, seenTargets, nestedTarget);
+		}
+	}
+	memo.set(role, expandedTargets);
+	return expandedTargets;
+}
+
+function appendUnique(targets: string[], seenTargets: Set<string>, target: string): void {
+	if (seenTargets.has(target)) return;
+	seenTargets.add(target);
+	targets.push(target);
+}
+
+function invalidAliasMapping(role: string, detail: string): Error {
+	return new Error(`invalid mapping for "${role}": ${detail}`);
 }
 
 function isSafePrefixEvent(event: StreamEventLike): boolean {

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatCooldownStatus, formatDuration, formatFailoverWarning, shortModelLabel } from "../status.ts";
+import {
+	composeFooterStatus,
+	formatCooldownStatus,
+	formatDuration,
+	formatFailoverWarning,
+	formatFooterStatus,
+	shortModelLabel,
+} from "../status.ts";
 
 const modelLabelExamples = [
 	["amazon-bedrock/model-primary", "opus-4-8"],
@@ -22,6 +29,32 @@ test("leaves an unprefixed model segment unchanged", () => {
 
 test("defaults a missing model label to unknown", () => {
 	assert.equal(shortModelLabel(undefined), "unknown");
+});
+
+test("formats a model-only footer", () => {
+	assert.equal(formatFooterStatus("provider/sol", []), "sol");
+});
+
+test("formats a model and cooldown footer", () => {
+	assert.equal(
+		formatFooterStatus("provider/sol", [{ targetRef: "provider/terra", remainingMs: 240_000 }]),
+		"sol · cooldown: terra 4m",
+	);
+});
+
+test("formats a cooldown-only footer", () => {
+	assert.equal(
+		formatFooterStatus(undefined, [{ targetRef: "provider/terra", remainingMs: 240_000 }]),
+		"cooldown: terra 4m",
+	);
+});
+
+test("omits an empty footer", () => {
+	const composedText = composeFooterStatus(undefined, undefined);
+	const formattedText = formatFooterStatus(undefined, []);
+
+	assert.equal(composedText, undefined);
+	assert.equal(formattedText, undefined);
 });
 
 test("omits cooldown status when no targets are cooling", () => {

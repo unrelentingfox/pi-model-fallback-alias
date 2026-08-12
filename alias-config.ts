@@ -12,7 +12,7 @@ export function loadAliases(debugLog: DebugLog): AliasMap {
 		return parseAliasMap(JSON.parse(readFileSync(MAP_PATH, "utf8")) as unknown);
 	} catch (error) {
 		debugLog.log("alias-map-error", { mapPath: MAP_PATH, message: describeFailure(error) });
-		console.warn(`[pi-model-alias] No aliases registered; could not read ${MAP_PATH}: ${describeFailure(error)}`);
+		console.warn(`[pi-model-alias] No aliases registered; could not load ${MAP_PATH}: ${describeFailure(error)}`);
 		return new Map();
 	}
 }

@@ -17,6 +17,8 @@ JSON file without touching anything else.
 - **Fallback chains**: a role maps to one `provider/model` string or an
   ordered array; resolution, authentication, HTTP, and connection failures
   advance to the next target, and exhaustion reports every target and reason
+- **Nested aliases**: fallback chains can include `alias/<role>` references,
+  which are flattened into concrete targets when the map loads
 - **Safe mid-stream semantics**: start/thinking events are buffered until
   real output is forwarded, so a failed thinking-only attempt is discarded
   and retried; once text or tool output flows, failover stops (Pi's stream
@@ -28,8 +30,9 @@ JSON file without touching anything else.
 - **Cross-process cooldown store**: cooldown state is shared through
   `logs/cooldown-state.json` (atomic writes, mtime-based reload), so main
   sessions and subagent processes see each other's failures
-- **Footer status**: a status-bar indicator lists every target currently on
-  cooldown (refreshed every 30 s), hidden when there is nothing to show
+- **Footer status**: a status-bar indicator always shows the current concrete
+  target's short label for an alias session model, followed by every cooling
+  target when present (refreshed every 30 s)
 - **Transcript warnings**: failovers and cooldown resets append durable
   entries to the chat transcript (rendered, expandable, never sent to the
   LLM) instead of transient popups
@@ -51,7 +54,10 @@ Aliases live in `<agent-dir>/model-alias.json` (usually
 
 ```json
 {
-  "coder-model": "anthropic/claude-sonnet-4-5",
+  "coder-model": [
+    "provider-example/model-primary",
+    "alias/fable-opus-fallback"
+  ],
   "summarizer": "openrouter/deepseek/deepseek-chat-v3-0324:free",
   "fable-opus-fallback": [
     "fable/fable-5",
@@ -62,8 +68,13 @@ Aliases live in `<agent-dir>/model-alias.json` (usually
 ```
 
 - Keys are role names; each becomes the model `alias/<role>`.
-- Values are one `provider/model` reference or an ordered fallback array.
-- Targets must be concrete models; an alias may not target another alias.
+- Values are one model reference or an ordered fallback array. Targets may be
+  concrete `provider/model` references or nested `alias/<role>` references.
+- Nested chains are flattened when the map loads. Duplicate concrete targets
+  keep their first position, and cooldowns apply per concrete target. An
+  unknown nested alias or cycle rejects the whole map: no aliases register,
+  and the reason is logged and warned. Fix the map before any alias works
+  again.
 - Edit the map, then `/reload` or restart Pi.
 
 ## Usage
@@ -88,9 +99,10 @@ model: alias/coder-model
 
 ## Troubleshooting
 
-- **Footer shows a cooling target** — the alias is serving from a fallback;
-  expand the transcript warning for the failure reason, or clear state with
-  `/reset-model-cooldown`.
+- **Footer target or cooldown looks stale** — the short label is the current
+  concrete target for the session's alias model; cooldowns follow after ` · `.
+  Wait for the next 30-second refresh, inspect the transcript warning, or clear
+  cooldown state with `/reset-model-cooldown`.
 - **Debug log** — `logs/pi-model-alias-debug.jsonl` inside this directory
   records loads, open attempts, failovers, cooldown changes, and UI errors
   (1 MiB rotation, previous file kept as `.old`).
