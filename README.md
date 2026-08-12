@@ -5,7 +5,7 @@ A [Pi](https://github.com/badlogic/pi-mono) extension that exposes stable
 provider/model — with ordered fallback chains, shared failure cooldowns, a
 live footer status, and durable transcript warnings.
 
-Point your session, subagents, and tooling at a role like `alias/coder-model`
+Point your session, subagents, and tooling at a role like `alias/coder`
 once; swap the underlying provider/model (or a whole fallback chain) in one
 JSON file without touching anything else.
 
@@ -54,7 +54,7 @@ Aliases live in `<agent-dir>/model-alias.json` (usually
 
 ```json
 {
-  "coder-model": [
+  "coder": [
     "provider-example/model-primary",
     "alias/fable-opus-fallback"
   ],
@@ -89,7 +89,7 @@ Aliases live in `<agent-dir>/model-alias.json` (usually
 
 ```yaml
 # agents/my-agent.md frontmatter
-model: alias/coder-model
+model: alias/coder
 ```
 
 ### Commands
