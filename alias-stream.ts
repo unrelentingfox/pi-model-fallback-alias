@@ -21,6 +21,7 @@ import {
 	resolveTargetReference,
 	runFallbackChain,
 	type AliasMap,
+	type AttemptTimeouts,
 	type CooldownRegistry,
 	type FailoverEntryData,
 } from "./fallback.ts";
@@ -32,6 +33,7 @@ type StreamKind = keyof Pick<ProviderStreams, "stream" | "streamSimple">;
 
 interface AliasStreamDependencies {
 	aliases: AliasMap;
+	timeoutsFor(role: string): AttemptTimeouts | undefined;
 	aliasModels: Model<Api>[];
 	session: AliasSession<Registry, ExtensionContext["ui"]>;
 	cooldowns: CooldownRegistry;
@@ -58,7 +60,7 @@ function createFallbackStream(
 	dependencies: AliasStreamDependencies,
 ): AssistantMessageEventStream {
 	const output = createAssistantMessageEventStream();
-	const { aliases, aliasModels, session, cooldowns, debugLog, onFailover } = dependencies;
+	const { aliases, timeoutsFor, aliasModels, session, cooldowns, debugLog, onFailover } = dependencies;
 	const registry = session.registry;
 	if (!registry) {
 		const error = new Error(`Model alias "${aliasModel.id}" cannot stream before a session starts in this process`);
@@ -74,11 +76,11 @@ function createFallbackStream(
 		targets,
 		cooldowns,
 		signal: options?.signal,
-		open: async (targetRef) => {
+		open: async (targetRef, attemptSignal) => {
 			try {
 				const target = await resolveAuthenticatedTarget(aliasModel.id, targetRef, registry);
 				mirrorTargetMetadata(aliasModel, aliasModels, target.model);
-				const stream = openTargetStream(kind, target, context, options);
+				const stream = openTargetStream(kind, target, context, options, linkedSignal(options?.signal, attemptSignal));
 				session.activeTargets.set(aliasModel.id, targetRef);
 				debugLog.log("open-attempt", { role: aliasModel.id, targetRef, ok: true });
 				return stream;
@@ -96,6 +98,8 @@ function createFallbackStream(
 			lastPartial = partialFrom(event) ?? lastPartial;
 			output.push(event);
 		},
+		timeoutsFor: () => timeoutsFor(aliasModel.id),
+		onTimeout: (targetRef, reason) => debugLog.log("attempt-timeout", { role: aliasModel.id, targetRef, reason }),
 		warn: (failedTarget, reason, nextTarget, cooldown) =>
 			onFailover({
 				role: aliasModel.id,
@@ -119,8 +123,9 @@ function openTargetStream(
 	target: { model: Model<Api>; provider: Provider; auth: ResolvedAuth },
 	context: Context,
 	options: StreamOptions | SimpleStreamOptions | undefined,
+	signal: AbortSignal | undefined,
 ): AssistantMessageEventStream {
-	const request = requestOptions(options, target.auth);
+	const request = requestOptions(options, target.auth, signal);
 	return kind === "streamSimple"
 		? target.provider.streamSimple(target.model, context, request as SimpleStreamOptions)
 		: target.provider.stream(target.model, context, request);
@@ -135,13 +140,24 @@ async function resolveAuthenticatedTarget(aliasId: string, targetRef: string, re
 	return { ...target, auth };
 }
 
-function requestOptions<T extends StreamOptions | SimpleStreamOptions>(options: T | undefined, auth: ResolvedAuth): T {
+function requestOptions<T extends StreamOptions | SimpleStreamOptions>(
+	options: T | undefined,
+	auth: ResolvedAuth,
+	signal: AbortSignal | undefined,
+): T {
 	return {
 		...options,
+		signal: signal ?? options?.signal,
 		apiKey: auth.apiKey ?? options?.apiKey,
 		headers: mergeHeaders(auth.headers, options?.headers),
 		env: { ...auth.env, ...options?.env },
 	} as T;
+}
+
+function linkedSignal(userSignal: AbortSignal | undefined, attemptSignal: AbortSignal | undefined): AbortSignal | undefined {
+	if (!userSignal) return attemptSignal;
+	if (!attemptSignal) return userSignal;
+	return AbortSignal.any([userSignal, attemptSignal]);
 }
 
 function mergeHeaders(

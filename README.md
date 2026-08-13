@@ -121,3 +121,35 @@ loading), `alias-model.ts` (model factory + metadata), `alias-stream.ts`
 registry), `cooldown-store.ts` (shared file-backed store), `transcript.ts`
 (entries + renderers), `session-status.ts` / `status.ts` (footer),
 `debug-log.ts` (JSONL logging).
+
+## Latency timeouts
+
+Timeouts are optional. With no `$defaults` or role `timeouts`, streaming keeps
+its prior behavior exactly. Configure defaults and role overrides as follows:
+
+```json
+{
+  "$defaults": {
+    "timeouts": { "firstEventMs": 30000, "stallMs": 60000 }
+  },
+  "coder": [
+    "provider-example/model-fallback",
+    "amazon-bedrock/model-fallback"
+  ],
+  "reviewer": {
+    "targets": ["alias/coder", "provider-example/model-primary"],
+    "timeouts": { "firstEventMs": 15000, "commitMs": 300000 }
+  }
+}
+```
+
+`firstEventMs` limits the time to the first provider event. `stallMs` limits
+silence between events and resets on each event, including thinking events.
+`commitMs` limits total pre-output time. All values are positive milliseconds;
+there is no default `commitMs` limit.
+
+Timeouts are active only if a fallback target remains. A one-target alias and
+the final target in a chain are never aborted for latency. Timers stop when
+text or tool output commits, so this extension never swaps providers after
+partial output reaches Pi. A latency timeout records the normal shared
+cooldown (30 seconds to 30 minutes), and the next request can skip that target.

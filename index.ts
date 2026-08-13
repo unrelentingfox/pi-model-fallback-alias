@@ -1,6 +1,6 @@
 import { createProvider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MAP_PATH, loadAliases } from "./alias-config.ts";
+import { MAP_PATH, loadAliasConfig } from "./alias-config.ts";
 import { aliasModel, initializeAliasMetadata } from "./alias-model.ts";
 import { createAliasStreams } from "./alias-stream.ts";
 import { registerAliasApiProvider } from "./api-registration.ts";
@@ -27,7 +27,8 @@ type Registry = ExtensionContext["modelRegistry"];
 export type AliasSession = StatusSession<Registry, ExtensionContext["ui"]>;
 
 export default function piModelAlias(pi: ExtensionAPI): void {
-	const aliases = loadAliases(DEBUG_LOG);
+	const aliasConfig = loadAliasConfig(DEBUG_LOG);
+	const { aliases, timeoutsFor } = aliasConfig;
 	DEBUG_LOG.log("extension-load", { mapPath: MAP_PATH, aliases: [...aliases.keys()] });
 	if (aliases.size === 0) return;
 
@@ -58,6 +59,7 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	const aliasModels = [...aliases.keys()].map((id) => aliasModel(id, PROVIDER_ID));
 	const streams = createAliasStreams({
 		aliases,
+		timeoutsFor,
 		aliasModels,
 		session,
 		cooldowns: TARGET_COOLDOWNS,

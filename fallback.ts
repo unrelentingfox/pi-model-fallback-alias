@@ -1,5 +1,25 @@
 export type AliasMap = ReadonlyMap<string, readonly string[]>;
 
+export interface AttemptTimeouts {
+	firstEventMs?: number;
+	stallMs?: number;
+	commitMs?: number;
+}
+
+export interface TimerHandle {
+	unref?(): void;
+}
+
+export interface TimerApi {
+	setTimeout(callback: () => void, delayMs: number): TimerHandle;
+	clearTimeout(handle: TimerHandle): void;
+}
+
+export interface AliasConfig {
+	aliases: AliasMap;
+	timeoutsFor(role: string): AttemptTimeouts | undefined;
+}
+
 export interface FailoverEntryData {
 	role: string;
 	failedTarget: string;
@@ -65,11 +85,38 @@ interface FallbackOptions<Event extends StreamEventLike> {
 	targets: readonly string[];
 	cooldowns?: CooldownRegistry;
 	signal?: Pick<AbortSignal, "aborted">;
-	open(target: string): Promise<AsyncIterable<Event>>;
+	open(target: string, attemptSignal?: AbortSignal): Promise<AsyncIterable<Event>>;
 	forward(event: Event): void | Promise<void>;
 	warn(failedTarget: string, reason: string, nextTarget: string | undefined, cooldown: CooldownUpdate): void;
 	snapshot?(event: Event): Event;
+	timeoutsFor?(target: string): AttemptTimeouts | undefined;
+	timers?: TimerApi;
+	onTimeout?(target: string, reason: string): void;
 }
+
+interface AttemptWatchdog {
+	readonly expired: Promise<void>;
+	readonly fired: TimeoutKind | undefined;
+	onEvent(): void;
+	disarm(): void;
+}
+
+type TimeoutKind = "first event" | "stall" | "commit";
+
+type AttemptOutcome =
+	| { kind: "complete" }
+	| { kind: "retryable-failure"; reason: string }
+	| { kind: "committed-failure" }
+	| { kind: "unsafe-throw"; error: unknown };
+
+const DEFAULT_TIMERS: TimerApi = {
+	setTimeout(callback, delayMs) {
+		return setTimeout(callback, delayMs);
+	},
+	clearTimeout(handle) {
+		clearTimeout(handle as ReturnType<typeof setTimeout>);
+	},
+};
 
 export const COOLDOWN_BASE_MS = 30_000;
 export const COOLDOWN_CAP_MS = 30 * 60_000;
@@ -110,14 +157,30 @@ export function nextCooldown(previous: CooldownState | undefined, now: number): 
 	return { failCount, nextRetryAt: now + durationMs, durationMs };
 }
 
-export function parseAliasMap(value: unknown): Map<string, readonly string[]> {
+export function parseAliasConfig(value: unknown): AliasConfig {
 	if (!isRecord(value)) throw new Error("expected a JSON object");
 
+	const defaults = parseDefaults(value.$defaults);
 	const aliases = new Map<string, readonly string[]>();
+	const roleTimeouts = new Map<string, AttemptTimeouts>();
 	for (const [role, configuredTargets] of Object.entries(value)) {
-		aliases.set(role, normalizeTargets(role, configuredTargets));
+		if (role === "$defaults") continue;
+		const config = parseRoleConfig(role, configuredTargets);
+		aliases.set(role, config.targets);
+		const timeouts = mergeTimeouts(defaults, config.timeouts);
+		if (timeouts) roleTimeouts.set(role, timeouts);
 	}
-	return expandNestedAliases(aliases);
+	const expandedAliases = expandNestedAliases(aliases);
+	return {
+		aliases: expandedAliases,
+		timeoutsFor(role) {
+			return roleTimeouts.get(role);
+		},
+	};
+}
+
+export function parseAliasMap(value: unknown): Map<string, readonly string[]> {
+	return parseAliasConfig(value).aliases as Map<string, readonly string[]>;
 }
 
 export function resolveTargetReference<Model, Provider>(
@@ -166,7 +229,7 @@ export async function runFallbackChain<Event extends StreamEventLike>(options: F
 	for (let index = 0; index < attempts.length; index++) {
 		const attempt = attempts[index]!;
 		const nextTarget = attempts[index + 1]?.target;
-		const outcome = await attemptTarget(options, attempt.target, cooldowns);
+		const outcome = await attemptTarget(options, attempt.target, cooldowns, nextTarget !== undefined);
 		if (outcome.kind === "complete" || outcome.kind === "committed-failure") return;
 		if (outcome.kind === "unsafe-throw") throw outcome.error;
 
@@ -264,28 +327,43 @@ function warnCooldown<Event extends StreamEventLike>(
 	options.warn(target, reason, nextTarget, cooldowns.recordFailure(target));
 }
 
-type AttemptOutcome =
-	| { kind: "complete" }
-	| { kind: "retryable-failure"; reason: string }
-	| { kind: "committed-failure" }
-	| { kind: "unsafe-throw"; error: unknown };
-
 async function attemptTarget<Event extends StreamEventLike>(
 	options: FallbackOptions<Event>,
 	target: string,
 	cooldowns: CooldownRegistry,
+	hasNextTarget: boolean,
 ): Promise<AttemptOutcome> {
 	let committed = false;
 	const buffered: Event[] = [];
+	const timeouts = hasNextTarget ? options.timeoutsFor?.(target) : undefined;
+	const controller = timeouts ? new AbortController() : undefined;
+	const watchdog = timeouts ? createWatchdog(timeouts, options.timers ?? DEFAULT_TIMERS, () => controller!.abort()) : undefined;
 	try {
-		const stream = await options.open(target);
-		for await (const event of stream) {
+		const stream = await options.open(target, controller?.signal);
+		const iterator = stream[Symbol.asyncIterator]();
+		for (;;) {
+			const next = iterator.next();
+			// Once committed, a stale fire must never win the race: failover is no longer possible.
+			const racing = watchdog !== undefined && !committed;
+			const result = racing ? await Promise.race([next, watchdog!.expired.then(() => undefined)]) : await next;
+			if (racing && watchdog!.fired) {
+				void next.catch(() => undefined);
+				void iterator.return?.().catch(() => undefined);
+				const reason = timeoutReason(watchdog.fired, timeouts!);
+				options.onTimeout?.(target, reason);
+				return { kind: "retryable-failure", reason };
+			}
+			if (!result || result.done) break;
+			const event = result.value;
+			watchdog?.onEvent();
 			if (isSuccessfulTerminal(event) || isAbortedTerminal(event)) {
+				watchdog?.disarm();
 				await flush(buffered, options.forward);
 				await options.forward(event);
 				return { kind: "complete" };
 			}
 			if (isFailureEvent(event)) {
+				watchdog?.disarm();
 				if (committed) {
 					await options.forward(event);
 					return { kind: "committed-failure" };
@@ -297,15 +375,23 @@ async function attemptTarget<Event extends StreamEventLike>(
 				continue;
 			}
 			if (!committed) {
+				watchdog?.disarm();
 				await flush(buffered, options.forward);
 				committed = true;
 				cooldowns.reset(target);
 			}
 			await options.forward(event);
 		}
+		watchdog?.disarm();
 		const reason = "stream ended without a terminal event";
 		return committed ? { kind: "unsafe-throw", error: new Error(reason) } : { kind: "retryable-failure", reason };
 	} catch (error) {
+		watchdog?.disarm();
+		if (watchdog?.fired && !committed) {
+			const reason = timeoutReason(watchdog.fired, timeouts!);
+			options.onTimeout?.(target, reason);
+			return { kind: "retryable-failure", reason };
+		}
 		if (committed || failureStopReason(error, options.signal) === "aborted") {
 			return { kind: "unsafe-throw", error };
 		}
@@ -313,13 +399,104 @@ async function attemptTarget<Event extends StreamEventLike>(
 	}
 }
 
+function createWatchdog(timeouts: AttemptTimeouts, timers: TimerApi, expire: () => void): AttemptWatchdog {
+	let firstEventHandle: TimerHandle | undefined;
+	let stallHandle: TimerHandle | undefined;
+	let commitHandle: TimerHandle | undefined;
+	let fired: TimeoutKind | undefined;
+	let resolveExpired!: () => void;
+	const expired = new Promise<void>((resolve) => {
+		resolveExpired = resolve;
+	});
+
+	const fire = (kind: TimeoutKind) => {
+		if (fired) return;
+		fired = kind;
+		resolveExpired();
+		expire();
+	};
+	const arm = (delayMs: number | undefined, kind: TimeoutKind): TimerHandle | undefined => {
+		if (!delayMs) return undefined;
+		const handle = timers.setTimeout(() => fire(kind), delayMs);
+		handle.unref?.();
+		return handle;
+	};
+	const clear = (handle: TimerHandle | undefined) => {
+		if (handle) timers.clearTimeout(handle);
+	};
+
+	firstEventHandle = arm(timeouts.firstEventMs, "first event");
+	stallHandle = arm(timeouts.stallMs, "stall");
+	commitHandle = arm(timeouts.commitMs, "commit");
+	return {
+		expired,
+		get fired() {
+			return fired;
+		},
+		onEvent() {
+			clear(firstEventHandle);
+			firstEventHandle = undefined;
+			clear(stallHandle);
+			stallHandle = arm(timeouts.stallMs, "stall");
+		},
+		disarm() {
+			clear(firstEventHandle);
+			clear(stallHandle);
+			clear(commitHandle);
+		},
+	};
+}
+
+function timeoutReason(kind: TimeoutKind, timeouts: AttemptTimeouts): string {
+	const delayMs = kind === "first event" ? timeouts.firstEventMs : kind === "stall" ? timeouts.stallMs : timeouts.commitMs;
+	return `latency timeout: no ${kind} within ${delayMs}ms`;
+}
+
 async function flush<Event>(events: Event[], forward: (event: Event) => void | Promise<void>): Promise<void> {
 	for (const event of events) await forward(event);
 	events.length = 0;
 }
 
-function normalizeTargets(role: string, value: unknown): readonly string[] {
+function parseDefaults(value: unknown): AttemptTimeouts | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value) || Object.keys(value).some((key) => key !== "timeouts")) {
+		throw new Error('invalid mapping for "$defaults"');
+	}
+	return parseTimeouts("$defaults", value.timeouts);
+}
+
+function parseRoleConfig(role: string, value: unknown): { targets: readonly string[]; timeouts?: AttemptTimeouts } {
 	if (!role) throw new Error('invalid mapping for ""');
+	if (!isRecord(value)) return { targets: normalizeTargets(role, value) };
+	if (Object.keys(value).some((key) => key !== "targets" && key !== "timeouts") || !("targets" in value)) {
+		throw new Error(`invalid mapping for "${role}"`);
+	}
+	return { targets: normalizeTargets(role, value.targets), timeouts: parseTimeouts(role, value.timeouts) };
+}
+
+function parseTimeouts(role: string, value: unknown): AttemptTimeouts | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) throw new Error(`invalid mapping for "${role}"`);
+	const validKeys = new Set(["firstEventMs", "stallMs", "commitMs"]);
+	if (Object.keys(value).some((key) => !validKeys.has(key))) throw new Error(`invalid mapping for "${role}"`);
+	const timeouts: AttemptTimeouts = {};
+	for (const key of validKeys) {
+		const delayMs = value[key];
+		if (delayMs === undefined) continue;
+		if (typeof delayMs !== "number" || !Number.isFinite(delayMs) || delayMs <= 0) {
+			throw new Error(`invalid mapping for "${role}"`);
+		}
+		Object.assign(timeouts, { [key]: delayMs });
+	}
+	return timeouts;
+}
+
+function mergeTimeouts(defaults: AttemptTimeouts | undefined, overrides: AttemptTimeouts | undefined): AttemptTimeouts | undefined {
+	if (!defaults && !overrides) return undefined;
+	return { ...defaults, ...overrides };
+}
+
+function normalizeTargets(role: string, value: unknown): readonly string[] {
 	const targets = typeof value === "string" ? [value] : value;
 	if (!Array.isArray(targets) || targets.length === 0 || targets.some((target) => !isModelRef(target))) {
 		throw new Error(`invalid mapping for "${role}"`);
