@@ -7,9 +7,12 @@ import { registerAliasApiProvider } from "./api-registration.ts";
 import { createSharedCooldownRegistry } from "./cooldown-store.ts";
 import { createDebugLog } from "./debug-log.ts";
 import { describeFailure } from "./fallback.ts";
+import { EXTENSION_LATENCY_LOG_PATH, expandLogPaths, readLatencyLog } from "./latency-log.ts";
+import { createLatencyReport, createLatencyReportEntry } from "./latency-report.ts";
 import { renderStatusTick, startSession, type AliasSession as StatusSession } from "./session-status.ts";
 import {
 	appendFailoverEntry,
+	appendLatencyReportEntry,
 	appendResetEntry,
 	registerTranscriptRenderers,
 	reportFailover,
@@ -108,6 +111,18 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 			const clearedCount = TARGET_COOLDOWNS.clearAll();
 			publishStatus();
 			appendResetEntry(pi, clearedCount);
+		},
+	});
+
+	pi.registerCommand("alias-latency-report", {
+		description: "Show model-alias attempt latency statistics",
+		getArgumentCompletions: (prefix) => [...aliases.keys()]
+			.filter((role) => role.startsWith(prefix))
+			.map((role) => ({ value: role, label: role })),
+		handler: async (args) => {
+			const role = args.trim() || undefined;
+			const report = createLatencyReport(readLatencyLog(expandLogPaths([EXTENSION_LATENCY_LOG_PATH])));
+			appendLatencyReportEntry(pi, createLatencyReportEntry(report, [...aliases.keys()], role));
 		},
 	});
 }

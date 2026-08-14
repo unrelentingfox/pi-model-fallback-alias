@@ -173,6 +173,8 @@ Run the report from this extension directory:
 node scripts/latency-report.mjs
 ```
 
+In Pi, run `/alias-latency-report` for the same transcript report, or pass an alias role to filter it: `/alias-latency-report coder`.
+
 Pass extra debug JSONL paths as arguments when needed. The report also reads
 `.old` rotations and skips malformed lines. The table shows timeout count, rate,
 and kind; the role summary warns when timers fire too often or do not fire in
