@@ -111,9 +111,15 @@ model: alias/coder
 
 ## Development
 
+Requires Node 22.18 or later because Node type stripping runs both the tests and the `.mjs` report CLI.
+
 ```bash
 node --test __tests__/*.test.ts
+bash scripts/typecheck.sh
 ```
+
+`typecheck.sh` finds the installed Pi runtime and its Node type definitions. It
+writes a temporary local override, so `tsconfig.json` stays portable.
 
 Module layout: `index.ts` (composition root), `alias-config.ts` (map
 loading), `alias-model.ts` (model factory + metadata), `alias-stream.ts`
@@ -153,3 +159,22 @@ the final target in a chain are never aborted for latency. Timers stop when
 text or tool output commits, so this extension never swaps providers after
 partial output reaches Pi. A latency timeout records the normal shared
 cooldown (30 seconds to 30 minutes), and the next request can skip that target.
+
+## Measuring latency
+
+Every provider attempt writes an `attempt-latency` debug record, even when
+latency timeouts are not configured. Records include time to first event, the
+largest event gap, commit and total time, event count, outcome, and terminal
+message token usage when Pi provides it.
+
+Run the report from this extension directory:
+
+```bash
+node scripts/latency-report.mjs
+```
+
+Pass extra debug JSONL paths as arguments when needed. The report also reads
+`.old` rotations and skips malformed lines. The table shows timeout count, rate,
+and kind; the role summary warns when timers fire too often or do not fire in
+200 attempts. Suggestions remain role-level heuristics from your own traffic;
+low-confidence targets need more samples.

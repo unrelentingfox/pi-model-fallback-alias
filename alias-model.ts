@@ -20,6 +20,7 @@ export function aliasModel(id: string, providerId: string): Model<Api> {
 		name: id,
 		api: ALIAS_API_ID,
 		provider: providerId,
+		baseUrl: "https://pi-model-alias.invalid",
 		reasoning: true,
 		input: ["text", "image"],
 		cost: ZERO_COST,

@@ -5,7 +5,7 @@ import { createCooldownRegistry, parseAliasConfig, runFallbackChain, type TimerA
 type Event = { type: "start" | "thinking_delta" | "text_start" | "done" | "error"; reason?: "error" | "aborted"; error?: { errorMessage?: string } };
 type Entry = { ms: number; callback: () => void; cleared: boolean; unrefed: boolean };
 
-function timers(): { api: TimerApi; entries: Entry[]; fire(ms: number): void } {
+function timers(): { api: TimerApi; entries: Entry[]; fire(ms: number): void; advance(ms: number): void } {
 	const entries: Entry[] = [];
 	const handles = new Map<object, Entry>();
 	return {
@@ -27,6 +27,9 @@ function timers(): { api: TimerApi; entries: Entry[]; fire(ms: number): void } {
 			const entry = entries.find((item) => item.ms === ms && !item.cleared);
 			assert.ok(entry, `expected an active ${ms}ms timer`);
 			entry.callback();
+		},
+		advance(ms) {
+			for (const entry of entries.filter((item) => item.ms === ms && !item.cleared)) entry.callback();
 		},
 	};
 }
@@ -52,7 +55,7 @@ function chain(clock: ReturnType<typeof timers>, open: (target: string, signal?:
 
 test("fails over on a first-event latency timeout", async () => {
 	const clock = timers(); const opened: string[] = []; const forwarded: string[] = []; const warnings: string[] = [];
-	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10 }), open: async (target) => { opened.push(target); return target === "a/model" ? never() : values({ type: "text_start" }, { type: "done" }); }, forward: async (event) => forwarded.push(event.type), warn: (_a, reason) => warnings.push(reason) });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10 }), open: async (target) => { opened.push(target); return target === "a/model" ? never() : values({ type: "text_start" }, { type: "done" }); }, forward: async (event) => { forwarded.push(event.type); }, warn: (_a, reason) => warnings.push(reason) });
 	await turn(); clock.fire(10); await run;
 	assert.deepEqual(opened, ["a/model", "b/model"]); assert.deepEqual(forwarded, ["text_start", "done"]); assert.match(warnings[0]!, /latency timeout/);
 });
@@ -60,7 +63,7 @@ test("fails over on a first-event latency timeout", async () => {
 test("resets the stall timer for thinking events and discards their buffer", async () => {
 	const clock = timers(); let release!: () => void; const wait = new Promise<void>((resolve) => (release = resolve)); const sent: string[] = [];
 	async function* thinking(): AsyncGenerator<Event> { yield { type: "thinking_delta" }; yield { type: "thinking_delta" }; await wait; }
-	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ stallMs: 20 }), open: async (target) => target === "a/model" ? thinking() : values({ type: "text_start" }, { type: "done" }), forward: async (event) => sent.push(event.type), warn: () => undefined });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ stallMs: 20 }), open: async (target) => target === "a/model" ? thinking() : values({ type: "text_start" }, { type: "done" }), forward: async (event) => { sent.push(event.type); }, warn: () => undefined });
 	await turn(); clock.fire(20); release(); await run;
 	assert.deepEqual(sent, ["text_start", "done"]); assert.ok(clock.entries.filter((entry) => entry.ms === 20).length >= 3);
 });
@@ -102,15 +105,52 @@ test("preserves a real user abort with configured timeouts", async () => {
 test("disarms all watchdog timers at commit", async () => {
 	const clock = timers(); let release!: () => void; const wait = new Promise<void>((resolve) => (release = resolve)); const forwarded: string[] = [];
 	async function* commits(): AsyncGenerator<Event> { yield { type: "text_start" }; await wait; yield { type: "done" }; }
-	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10, stallMs: 20, commitMs: 30 }), open: async (target) => target === "a/model" ? commits() : values({ type: "done" }), forward: async (event) => forwarded.push(event.type), warn: () => undefined });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10, stallMs: 20, commitMs: 30 }), open: async (target) => target === "a/model" ? commits() : values({ type: "done" }), forward: async (event) => { forwarded.push(event.type); }, warn: () => undefined });
 	await turn(); assert.ok(clock.entries.every((entry) => entry.unrefed)); release(); await run; assert.deepEqual(forwarded, ["text_start", "done"]);
+});
+
+test("does not rearm the watchdog after commit", async () => {
+	const clock = timers();
+	let emitPostCommit!: () => void;
+	let complete!: () => void;
+	let aborts = 0;
+	const forwarded: Event[] = [];
+	const postCommit = new Promise<void>((resolve) => (emitPostCommit = resolve));
+	const completion = new Promise<void>((resolve) => (complete = resolve));
+	async function* commitsThenPauses(): AsyncGenerator<Event> {
+		yield { type: "text_start" };
+		await postCommit;
+		yield { type: "thinking_delta" };
+		await completion;
+		yield { type: "done" };
+	}
+	const run = runFallbackChain({
+		role: "coder",
+		targets: ["a/model", "b/model"],
+		timers: clock.api,
+		timeoutsFor: () => ({ stallMs: 20 }),
+		open: async (target, signal) => {
+			signal?.addEventListener("abort", () => { aborts++; });
+			return target === "a/model" ? commitsThenPauses() : values({ type: "done" });
+		},
+		forward: async (event) => { forwarded.push(event); },
+		warn: () => undefined,
+	});
+	await turn();
+	emitPostCommit();
+	await turn();
+	clock.advance(20);
+	complete();
+	await run;
+	assert.equal(aborts, 0);
+	assert.deepEqual(forwarded.map((event) => event.type), ["text_start", "thinking_delta", "done"]);
 });
 
 test("ignores a timer that fires as the stream commits", async () => {
 	const clock = timers(); let release!: () => void; const wait = new Promise<void>((resolve) => (release = resolve));
 	const opened: string[] = []; const forwarded: string[] = []; const warned: string[] = [];
 	async function* commits(): AsyncGenerator<Event> { yield { type: "text_start" }; await wait; yield { type: "done" }; }
-	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10, stallMs: 20 }), open: async (target) => { opened.push(target); return target === "a/model" ? commits() : values({ type: "done" }); }, forward: async (event) => forwarded.push(event.type), warn: (target) => warned.push(target) });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10, stallMs: 20 }), open: async (target) => { opened.push(target); return target === "a/model" ? commits() : values({ type: "done" }); }, forward: async (event) => { forwarded.push(event.type); }, warn: (target) => warned.push(target) });
 	await turn(); clock.entries.forEach((entry) => { entry.cleared = false; }); clock.fire(20); release(); await run;
 	assert.deepEqual(opened, ["a/model"]); assert.deepEqual(forwarded, ["text_start", "done"]); assert.deepEqual(warned, []);
 });

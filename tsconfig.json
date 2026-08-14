@@ -1,0 +1,18 @@
+{
+	"compilerOptions": {
+		"target": "esnext",
+		"module": "preserve",
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		"lib": ["esnext", "dom"],
+		"strict": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noFallthroughCasesInSwitch": true,
+		"ignoreDeprecations": "6.0"
+	},
+	"include": ["**/*.ts"],
+	"exclude": ["node_modules", "logs"]
+}

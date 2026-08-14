@@ -1,3 +1,5 @@
+import type { LatencyOutcome, LatencySample, TimeoutKind } from "./latency-stats.ts";
+
 export type AliasMap = ReadonlyMap<string, readonly string[]>;
 
 export interface AttemptTimeouts {
@@ -64,6 +66,9 @@ export interface TargetFailure {
 	retriedFromCooldown?: boolean;
 }
 
+export type AttemptLatencySample = LatencySample;
+export type AttemptLatencyOutcome = LatencyOutcome;
+
 interface TargetAttempt {
 	target: string;
 	targetIndex: number;
@@ -77,10 +82,11 @@ interface IndexedTargetFailure extends TargetFailure {
 interface StreamEventLike {
 	type: string;
 	reason?: string;
+	message?: unknown;
 	error?: { errorMessage?: string };
 }
 
-interface FallbackOptions<Event extends StreamEventLike> {
+export interface FallbackOptions<Event extends StreamEventLike> {
 	role: string;
 	targets: readonly string[];
 	cooldowns?: CooldownRegistry;
@@ -91,6 +97,8 @@ interface FallbackOptions<Event extends StreamEventLike> {
 	snapshot?(event: Event): Event;
 	timeoutsFor?(target: string): AttemptTimeouts | undefined;
 	timers?: TimerApi;
+	now?: () => number;
+	onLatency?(sample: AttemptLatencySample): void;
 	onTimeout?(target: string, reason: string): void;
 }
 
@@ -100,8 +108,6 @@ interface AttemptWatchdog {
 	onEvent(): void;
 	disarm(): void;
 }
-
-type TimeoutKind = "first event" | "stall" | "commit";
 
 type AttemptOutcome =
 	| { kind: "complete" }
@@ -118,9 +124,9 @@ const DEFAULT_TIMERS: TimerApi = {
 	},
 };
 
-export const COOLDOWN_BASE_MS = 30_000;
-export const COOLDOWN_CAP_MS = 30 * 60_000;
-export const MAX_UNCAPPED_EXPONENT = 6;
+const COOLDOWN_BASE_MS = 30_000;
+const COOLDOWN_CAP_MS = 30 * 60_000;
+const MAX_UNCAPPED_EXPONENT = 6;
 
 export function createCooldownRegistry(now: () => number = Date.now): CooldownRegistry {
 	const entries = new Map<string, CooldownState>();
@@ -179,9 +185,6 @@ export function parseAliasConfig(value: unknown): AliasConfig {
 	};
 }
 
-export function parseAliasMap(value: unknown): Map<string, readonly string[]> {
-	return parseAliasConfig(value).aliases as Map<string, readonly string[]>;
-}
 
 export function resolveTargetReference<Model, Provider>(
 	aliasId: string,
@@ -273,24 +276,34 @@ async function forwardSingleTarget<Event extends StreamEventLike>(
 ): Promise<void> {
 	let committed = false;
 	let failureRecorded = false;
+	let outcome: AttemptLatencyOutcome = "complete";
+	const latency = createLatencySampler(options, target);
 	try {
 		const stream = await options.open(target);
 		for await (const event of stream) {
+			latency.recordEvent();
+			if (isSuccessfulTerminal(event) || isAbortedTerminal(event) || isFailureEvent(event)) latency.recordUsage(event);
 			if (!committed && !failureRecorded && isFailureEvent(event)) {
 				failureRecorded = true;
+				outcome = "retryable-failure";
 				warnCooldown(options, target, failureEventReason(event), undefined, cooldowns);
 			}
 			if (!committed && isCommitEvent(event)) {
 				committed = true;
+				latency.commit();
 				if (!failureRecorded) cooldowns.reset(target);
 			}
+			if (committed && isFailureEvent(event)) outcome = "committed-failure";
 			await options.forward(event);
 		}
 	} catch (error) {
+		outcome = "unsafe-throw";
 		if (!committed && !failureRecorded && failureStopReason(error, options.signal) !== "aborted") {
 			warnCooldown(options, target, describeFailure(error), undefined, cooldowns);
 		}
 		throw error;
+	} finally {
+		latency.emit(outcome);
 	}
 }
 
@@ -334,6 +347,8 @@ async function attemptTarget<Event extends StreamEventLike>(
 	hasNextTarget: boolean,
 ): Promise<AttemptOutcome> {
 	let committed = false;
+	let outcome: AttemptLatencyOutcome = "unsafe-throw";
+	const latency = createLatencySampler(options, target);
 	const buffered: Event[] = [];
 	const timeouts = hasNextTarget ? options.timeoutsFor?.(target) : undefined;
 	const controller = timeouts ? new AbortController() : undefined;
@@ -351,23 +366,30 @@ async function attemptTarget<Event extends StreamEventLike>(
 				void iterator.return?.().catch(() => undefined);
 				const reason = timeoutReason(watchdog.fired, timeouts!);
 				options.onTimeout?.(target, reason);
+				outcome = "timeout";
 				return { kind: "retryable-failure", reason };
 			}
 			if (!result || result.done) break;
 			const event = result.value;
-			watchdog?.onEvent();
+			latency.recordEvent();
+			if (!committed) watchdog?.onEvent();
 			if (isSuccessfulTerminal(event) || isAbortedTerminal(event)) {
+				latency.recordUsage(event);
 				watchdog?.disarm();
 				await flush(buffered, options.forward);
 				await options.forward(event);
+				outcome = "complete";
 				return { kind: "complete" };
 			}
 			if (isFailureEvent(event)) {
+				latency.recordUsage(event);
 				watchdog?.disarm();
 				if (committed) {
 					await options.forward(event);
+					outcome = "committed-failure";
 					return { kind: "committed-failure" };
 				}
+				outcome = "retryable-failure";
 				return { kind: "retryable-failure", reason: failureEventReason(event) };
 			}
 			if (!committed && isSafePrefixEvent(event)) {
@@ -378,31 +400,95 @@ async function attemptTarget<Event extends StreamEventLike>(
 				watchdog?.disarm();
 				await flush(buffered, options.forward);
 				committed = true;
+				latency.commit();
 				cooldowns.reset(target);
 			}
 			await options.forward(event);
 		}
 		watchdog?.disarm();
 		const reason = "stream ended without a terminal event";
+		outcome = committed ? "unsafe-throw" : "retryable-failure";
 		return committed ? { kind: "unsafe-throw", error: new Error(reason) } : { kind: "retryable-failure", reason };
 	} catch (error) {
 		watchdog?.disarm();
 		if (watchdog?.fired && !committed) {
 			const reason = timeoutReason(watchdog.fired, timeouts!);
 			options.onTimeout?.(target, reason);
+			outcome = "timeout";
 			return { kind: "retryable-failure", reason };
 		}
 		if (committed || failureStopReason(error, options.signal) === "aborted") {
+			outcome = "unsafe-throw";
 			return { kind: "unsafe-throw", error };
 		}
+		outcome = "retryable-failure";
 		return { kind: "retryable-failure", reason: describeFailure(error) };
+	} finally {
+		latency.emit(outcome, outcome === "timeout" ? watchdog?.fired : undefined);
 	}
+}
+
+function createLatencySampler<Event extends StreamEventLike>(
+	options: FallbackOptions<Event>,
+	targetRef: string,
+): { recordEvent(): void; commit(): void; recordUsage(event: Event): void; emit(outcome: AttemptLatencyOutcome, timeoutKind?: TimeoutKind): void } {
+	const now = options.now ?? Date.now;
+	const openedAt = now();
+	let firstEventAt: number | undefined;
+	let previousEventAt: number | undefined;
+	let commitAt: number | undefined;
+	let maxGapMs = 0;
+	let eventCount = 0;
+	let tokens: Pick<AttemptLatencySample, "inputTokens" | "cacheReadTokens" | "outputTokens"> = {};
+	return {
+		recordEvent() {
+			const eventAt = now();
+			firstEventAt ??= eventAt;
+			if (previousEventAt !== undefined) maxGapMs = Math.max(maxGapMs, eventAt - previousEventAt);
+			previousEventAt = eventAt;
+			eventCount++;
+		},
+		commit() {
+			commitAt ??= now();
+		},
+		recordUsage(event) {
+			tokens = extractUsage(event) ?? tokens;
+		},
+		emit(outcome, timeoutKind) {
+			try {
+				const sample: AttemptLatencySample = {
+					role: options.role,
+					targetRef,
+					...(firstEventAt === undefined ? {} : { ttfbMs: firstEventAt - openedAt }),
+					maxGapMs,
+					...(commitAt === undefined ? {} : { commitMs: commitAt - openedAt }),
+					totalMs: now() - openedAt,
+					eventCount,
+					committed: commitAt !== undefined,
+					outcome,
+					...(timeoutKind === undefined ? {} : { timeoutKind }),
+					...tokens,
+				};
+				options.onLatency?.(sample);
+			} catch {}
+		},
+	};
+}
+
+function extractUsage(event: StreamEventLike): Pick<AttemptLatencySample, "inputTokens" | "cacheReadTokens" | "outputTokens"> | undefined {
+	if (!isRecord(event)) return undefined;
+	const terminalMessage = event.type === "done" ? event.message : event.error;
+	if (!isRecord(terminalMessage) || !isRecord(terminalMessage.usage)) return undefined;
+	const { input, cacheRead, output } = terminalMessage.usage;
+	if (typeof input !== "number" || typeof cacheRead !== "number" || typeof output !== "number") return undefined;
+	return { inputTokens: input, cacheReadTokens: cacheRead, outputTokens: output };
 }
 
 function createWatchdog(timeouts: AttemptTimeouts, timers: TimerApi, expire: () => void): AttemptWatchdog {
 	let firstEventHandle: TimerHandle | undefined;
 	let stallHandle: TimerHandle | undefined;
 	let commitHandle: TimerHandle | undefined;
+	let disarmed = false;
 	let fired: TimeoutKind | undefined;
 	let resolveExpired!: () => void;
 	const expired = new Promise<void>((resolve) => {
@@ -416,7 +502,7 @@ function createWatchdog(timeouts: AttemptTimeouts, timers: TimerApi, expire: () 
 		expire();
 	};
 	const arm = (delayMs: number | undefined, kind: TimeoutKind): TimerHandle | undefined => {
-		if (!delayMs) return undefined;
+		if (disarmed || !delayMs) return undefined;
 		const handle = timers.setTimeout(() => fire(kind), delayMs);
 		handle.unref?.();
 		return handle;
@@ -440,6 +526,7 @@ function createWatchdog(timeouts: AttemptTimeouts, timers: TimerApi, expire: () 
 			stallHandle = arm(timeouts.stallMs, "stall");
 		},
 		disarm() {
+			disarmed = true;
 			clear(firstEventHandle);
 			clear(stallHandle);
 			clear(commitHandle);

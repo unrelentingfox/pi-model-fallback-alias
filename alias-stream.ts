@@ -28,7 +28,7 @@ import {
 import type { AliasSession } from "./session-status.ts";
 
 type Registry = ExtensionContext["modelRegistry"];
-type ResolvedAuth = { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> };
+type ResolvedAuth = { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> };
 type StreamKind = keyof Pick<ProviderStreams, "stream" | "streamSimple">;
 
 interface AliasStreamDependencies {
@@ -99,6 +99,7 @@ function createFallbackStream(
 			output.push(event);
 		},
 		timeoutsFor: () => timeoutsFor(aliasModel.id),
+		onLatency: (sample) => debugLog.log("attempt-latency", sample),
 		onTimeout: (targetRef, reason) => debugLog.log("attempt-timeout", { role: aliasModel.id, targetRef, reason }),
 		warn: (failedTarget, reason, nextTarget, cooldown) =>
 			onFailover({
@@ -161,7 +162,7 @@ function linkedSignal(userSignal: AbortSignal | undefined, attemptSignal: AbortS
 }
 
 function mergeHeaders(
-	authHeaders: Record<string, string> | undefined,
+	authHeaders: ProviderHeaders | undefined,
 	requestHeaders: ProviderHeaders | undefined,
 ): ProviderHeaders | undefined {
 	if (!authHeaders && !requestHeaders) return undefined;

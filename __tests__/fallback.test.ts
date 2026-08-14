@@ -10,7 +10,7 @@ import {
 	createCooldownRegistry,
 	failureStopReason,
 	formatExhaustionError,
-	parseAliasMap,
+	parseAliasConfig,
 	resolveFirstTarget,
 	resolveTargetReference,
 	runFallbackChain,
@@ -31,6 +31,10 @@ const fakeRegistry = {
 		return providerId === "good" ? { id: providerId } : undefined;
 	},
 };
+
+function aliasesOf(value: unknown): ReadonlyMap<string, readonly string[]> {
+	return parseAliasConfig(value).aliases;
+}
 
 test("replaces the global alias API registration with the shared streams", async () => {
 	const calls: string[] = [];
@@ -76,7 +80,7 @@ test("continues with one warning when the compat API registry is unavailable", a
 });
 
 test("parses string and ordered array mappings", () => {
-	const aliases = parseAliasMap({ single: "good/model", chain: ["bad/model", "good/model"] });
+	const aliases = aliasesOf({ single: "good/model", chain: ["bad/model", "good/model"] });
 
 	assert.deepEqual([...aliases], [
 		["single", ["good/model"]],
@@ -85,7 +89,7 @@ test("parses string and ordered array mappings", () => {
 });
 
 test("expands a nested alias in place", () => {
-	const aliases = parseAliasMap({
+	const aliases = aliasesOf({
 		coder: ["provider/first", "alias/fallback", "provider/last"],
 		fallback: ["provider/second", "provider/third"],
 	});
@@ -99,7 +103,7 @@ test("expands a nested alias in place", () => {
 });
 
 test("expands multi-level nested aliases", () => {
-	const aliases = parseAliasMap({
+	const aliases = aliasesOf({
 		a: "alias/b",
 		b: ["provider/b", "alias/c"],
 		c: "provider/c",
@@ -109,7 +113,7 @@ test("expands multi-level nested aliases", () => {
 });
 
 test("expands a diamond through its shared alias once", () => {
-	const aliases = parseAliasMap({
+	const aliases = aliasesOf({
 		a: ["alias/b", "alias/c"],
 		b: ["p/1", "alias/d"],
 		c: ["p/2", "alias/d"],
@@ -120,7 +124,7 @@ test("expands a diamond through its shared alias once", () => {
 });
 
 test("deduplicates expanded targets at their first position", () => {
-	const aliases = parseAliasMap({
+	const aliases = aliasesOf({
 		coder: ["provider/one", "alias/shared", "provider/two"],
 		shared: ["provider/two", "provider/one", "provider/three"],
 	});
@@ -129,14 +133,14 @@ test("deduplicates expanded targets at their first position", () => {
 });
 
 test("deduplicates concrete targets in a flat chain", () => {
-	const aliases = parseAliasMap({ top: ["p/1", "p/2", "p/1"] });
+	const aliases = aliasesOf({ top: ["p/1", "p/2", "p/1"] });
 
 	assert.deepEqual(aliases.get("top"), ["p/1", "p/2"]);
 });
 
 test("rejects a self-referencing alias cycle", () => {
 	assert.throws(
-		() => parseAliasMap({ "coder-model": ["provider/model", "alias/coder-model"] }),
+		() => aliasesOf({ "coder-model": ["provider/model", "alias/coder-model"] }),
 		(error) =>
 			error instanceof Error &&
 			error.message === 'invalid mapping for "coder-model": alias cycle coder-model -> coder-model',
@@ -145,7 +149,7 @@ test("rejects a self-referencing alias cycle", () => {
 
 test("rejects a mutual alias cycle", () => {
 	assert.throws(
-		() => parseAliasMap({ a: "alias/b", b: "alias/a" }),
+		() => aliasesOf({ a: "alias/b", b: "alias/a" }),
 		(error) => error instanceof Error && error.message === 'invalid mapping for "a": alias cycle a -> b -> a',
 	);
 });
@@ -153,7 +157,7 @@ test("rejects a mutual alias cycle", () => {
 test("attributes a nested cycle to the role that owns it", () => {
 	assert.throws(
 		() =>
-			parseAliasMap({
+			aliasesOf({
 				r: "alias/x",
 				x: ["p/9", "alias/y"],
 				y: "alias/z",
@@ -167,7 +171,7 @@ test("attributes a nested cycle to the role that owns it", () => {
 
 test("rejects an unknown nested alias", () => {
 	assert.throws(
-		() => parseAliasMap({ "coder-model": "alias/nope" }),
+		() => aliasesOf({ "coder-model": "alias/nope" }),
 		(error) =>
 			error instanceof Error &&
 			error.message === 'invalid mapping for "coder-model": unknown alias target "alias/nope"',
@@ -176,7 +180,7 @@ test("rejects an unknown nested alias", () => {
 
 test("attributes a deeply nested unknown alias to its immediate role", () => {
 	assert.throws(
-		() => parseAliasMap({ r: "alias/x", x: "alias/y", y: ["p/1", "alias/ghost"] }),
+		() => aliasesOf({ r: "alias/x", x: "alias/y", y: ["p/1", "alias/ghost"] }),
 		(error) =>
 			error instanceof Error &&
 			error.message === 'invalid mapping for "y": unknown alias target "alias/ghost"',
@@ -184,13 +188,13 @@ test("attributes a deeply nested unknown alias to its immediate role", () => {
 });
 
 test("expands a string-form nested alias", () => {
-	const aliases = parseAliasMap({ x: "alias/y", y: "provider/model" });
+	const aliases = aliasesOf({ x: "alias/y", y: "provider/model" });
 
 	assert.deepEqual(aliases.get("x"), ["provider/model"]);
 });
 
 test("leaves a map without nested aliases unchanged", () => {
-	const aliases = parseAliasMap({
+	const aliases = aliasesOf({
 		single: "provider/model",
 		chain: ["provider/first", "provider/second"],
 	});
@@ -202,8 +206,8 @@ test("leaves a map without nested aliases unchanged", () => {
 });
 
 test("rejects empty and invalid target arrays", () => {
-	assert.throws(() => parseAliasMap({ empty: [] }), /invalid mapping for "empty"/u);
-	assert.throws(() => parseAliasMap({ invalid: ["good/model", 4] }), /invalid mapping for "invalid"/u);
+	assert.throws(() => aliasesOf({ empty: [] }), /invalid mapping for "empty"/u);
+	assert.throws(() => aliasesOf({ invalid: ["good/model", 4] }), /invalid mapping for "invalid"/u);
 });
 
 test("resolves the first available target in preference order", () => {
@@ -225,7 +229,7 @@ test("fails over when a target throws before its first visible event", async () 
 			if (target === "bad/model") return throwBeforeEvent("connection refused");
 			return events({ type: "start", partial: "good" }, { type: "done", message: "ok" });
 		},
-		forward: (event) => forwarded.push(event),
+		forward: (event) => { forwarded.push(event); },
 		warn: (failed, reason, next) => warnings.push(`${failed}: ${reason} -> ${next}`),
 	});
 
@@ -510,7 +514,7 @@ test("flushes buffered thinking events once in order when the fallback commits",
 			}
 			return events(...committed);
 		},
-		forward: (event) => forwarded.push(event),
+		forward: (event) => { forwarded.push(event); },
 		warn: (failed, reason, next) => warnings.push(`${failed}: ${reason} -> ${next}`),
 	});
 
@@ -535,7 +539,7 @@ test("flushes buffered thinking before an aborted terminal without failing over"
 			opened.push(target);
 			return events(...source);
 		},
-		forward: (event) => forwarded.push(event),
+		forward: (event) => { forwarded.push(event); },
 		warn: () => assert.fail("an aborted stream must not fail over"),
 	});
 
@@ -583,7 +587,7 @@ test("does not restart after non-thinking output was forwarded", async () => {
 				opened.push(target);
 				return emitTwoThenThrow();
 			},
-			forward: (event) => forwarded.push(event),
+			forward: (event) => { forwarded.push(event); },
 			warn: () => assert.fail("mid-stream failure must not warn about failover"),
 		}),
 		/stream broke/u,
@@ -617,7 +621,7 @@ test("formats every failure when all targets are exhausted", async () => {
 });
 
 test("passes a single string target stream through unchanged", async () => {
-	const aliases = parseAliasMap({ role: "good/model" });
+	const aliases = aliasesOf({ role: "good/model" });
 	const warnings: string[] = [];
 	const source = [
 		{ type: "start", partial: "one" },
@@ -629,7 +633,7 @@ test("passes a single string target stream through unchanged", async () => {
 		role: "role",
 		targets: aliases.get("role")!,
 		open: async () => events(...source),
-		forward: (event) => forwarded.push(event),
+		forward: (event) => { forwarded.push(event); },
 		warn: (target, reason, next) => warnings.push(`${target}: ${reason} -> ${String(next)}`),
 	});
 
