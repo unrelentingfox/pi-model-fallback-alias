@@ -20,6 +20,14 @@ export interface TimerApi {
 export interface AliasConfig {
 	aliases: AliasMap;
 	timeoutsFor(role: string): AttemptTimeouts | undefined;
+	warnings: readonly AliasExpansionWarning[];
+}
+
+/** A nested-alias ref skipped during expansion (cycle, unknown alias, or depth cap). */
+export interface AliasExpansionWarning {
+	role: string;
+	target: string;
+	reason: string;
 }
 
 export interface FailoverEntryData {
@@ -176,12 +184,13 @@ export function parseAliasConfig(value: unknown): AliasConfig {
 		const timeouts = mergeTimeouts(defaults, config.timeouts);
 		if (timeouts) roleTimeouts.set(role, timeouts);
 	}
-	const expandedAliases = expandNestedAliases(aliases);
+	const expanded = expandNestedAliases(aliases);
 	return {
-		aliases: expandedAliases,
+		aliases: expanded.aliases,
 		timeoutsFor(role) {
 			return roleTimeouts.get(role);
 		},
+		warnings: expanded.warnings,
 	};
 }
 
@@ -221,6 +230,11 @@ export function resolveFirstTarget<Model, Provider>(
 }
 
 export async function runFallbackChain<Event extends StreamEventLike>(options: FallbackOptions<Event>): Promise<void> {
+	if (options.targets.length === 0) {
+		throw new Error(
+			`Model alias "${options.role}" has no usable targets (all skipped during config expansion — see model-alias config warnings)`,
+		);
+	}
 	const cooldowns = options.cooldowns ?? createCooldownRegistry();
 	if (options.targets.length === 1) {
 		await forwardSingleTarget(options, options.targets[0]!, cooldowns);
@@ -591,30 +605,34 @@ function normalizeTargets(role: string, value: unknown): readonly string[] {
 	return targets;
 }
 
-function expandNestedAliases(aliases: Map<string, readonly string[]>): Map<string, readonly string[]> {
-	const expandedAliases = new Map<string, readonly string[]>();
-	const memo = new Map<string, readonly string[]>();
-	for (const role of aliases.keys()) {
-		expandedAliases.set(role, expandAlias(role, aliases, memo, []));
-	}
-	return expandedAliases;
+/** Nested-alias refs deeper than this are skipped with a warning; deeper nesting is almost certainly a config mistake. */
+export const MAX_ALIAS_DEPTH = 4;
+
+interface ExpandedAliases {
+	aliases: Map<string, readonly string[]>;
+	warnings: readonly AliasExpansionWarning[];
 }
 
+function expandNestedAliases(aliases: Map<string, readonly string[]>): ExpandedAliases {
+	const expandedAliases = new Map<string, readonly string[]>();
+	// Keyed dedupe: expansions recompute per entry point and would repeat warnings.
+	const warnings = new Map<string, AliasExpansionWarning>();
+	for (const role of aliases.keys()) {
+		expandedAliases.set(role, expandAlias(role, aliases, [], warnings));
+	}
+	return { aliases: expandedAliases, warnings: [...warnings.values()] };
+}
+
+// Deliberately unmemoized: the depth cap makes an expansion path-dependent, so a
+// reused result would let declaration order decide whether a deep ref is skipped.
+// Alias maps are tiny (a handful of roles, depth ≤ MAX_ALIAS_DEPTH), so each
+// top-level role re-expands with its own true path depth.
 function expandAlias(
 	role: string,
 	aliases: Map<string, readonly string[]>,
-	memo: Map<string, readonly string[]>,
 	path: readonly string[],
+	warnings: Map<string, AliasExpansionWarning>,
 ): readonly string[] {
-	const memoized = memo.get(role);
-	if (memoized) return memoized;
-
-	const cycleStart = path.indexOf(role);
-	if (cycleStart >= 0) {
-		const cycle = [...path.slice(cycleStart), role].join(" -> ");
-		throw invalidAliasMapping(role, `alias cycle ${cycle}`);
-	}
-
 	const expandedTargets: string[] = [];
 	const seenTargets = new Set<string>();
 	for (const target of aliases.get(role)!) {
@@ -623,25 +641,41 @@ function expandAlias(
 			appendUnique(expandedTargets, seenTargets, target);
 			continue;
 		}
-		if (!aliases.has(nestedRole)) {
-			throw invalidAliasMapping(role, `unknown alias target "${target}"`);
+		const skipReason = nestedSkipReason(role, nestedRole, aliases, path);
+		if (skipReason) {
+			recordWarning(warnings, { role, target, reason: skipReason });
+			continue;
 		}
-		for (const nestedTarget of expandAlias(nestedRole, aliases, memo, [...path, role])) {
+		for (const nestedTarget of expandAlias(nestedRole, aliases, [...path, role], warnings)) {
 			appendUnique(expandedTargets, seenTargets, nestedTarget);
 		}
 	}
-	memo.set(role, expandedTargets);
 	return expandedTargets;
+}
+
+function nestedSkipReason(
+	role: string,
+	nestedRole: string,
+	aliases: Map<string, readonly string[]>,
+	path: readonly string[],
+): string | undefined {
+	if (!aliases.has(nestedRole)) return `unknown alias target "alias/${nestedRole}"`;
+	if (nestedRole === role || path.includes(nestedRole)) {
+		const chain = [...path, role, nestedRole];
+		return `alias cycle ${chain.slice(chain.indexOf(nestedRole)).join(" -> ")}`;
+	}
+	if (path.length + 1 > MAX_ALIAS_DEPTH) return `alias nesting deeper than ${MAX_ALIAS_DEPTH} levels`;
+	return undefined;
+}
+
+function recordWarning(warnings: Map<string, AliasExpansionWarning>, warning: AliasExpansionWarning): void {
+	warnings.set(`${warning.role}\u0000${warning.target}\u0000${warning.reason}`, warning);
 }
 
 function appendUnique(targets: string[], seenTargets: Set<string>, target: string): void {
 	if (seenTargets.has(target)) return;
 	seenTargets.add(target);
 	targets.push(target);
-}
-
-function invalidAliasMapping(role: string, detail: string): Error {
-	return new Error(`invalid mapping for "${role}": ${detail}`);
 }
 
 function isSafePrefixEvent(event: StreamEventLike): boolean {

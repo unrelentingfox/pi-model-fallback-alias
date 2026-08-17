@@ -10,6 +10,7 @@ import {
 	createCooldownRegistry,
 	failureStopReason,
 	formatExhaustionError,
+	MAX_ALIAS_DEPTH,
 	parseAliasConfig,
 	resolveFirstTarget,
 	resolveTargetReference,
@@ -138,53 +139,99 @@ test("deduplicates concrete targets in a flat chain", () => {
 	assert.deepEqual(aliases.get("top"), ["p/1", "p/2"]);
 });
 
-test("rejects a self-referencing alias cycle", () => {
-	assert.throws(
-		() => aliasesOf({ "coder-model": ["provider/model", "alias/coder-model"] }),
-		(error) =>
-			error instanceof Error &&
-			error.message === 'invalid mapping for "coder-model": alias cycle coder-model -> coder-model',
-	);
+test("skips a self-referencing alias cycle and warns", () => {
+	const config = parseAliasConfig({ "coder-model": ["provider/model", "alias/coder-model"] });
+	assert.deepEqual(config.aliases.get("coder-model"), ["provider/model"]);
+	assert.deepEqual(config.warnings, [
+		{ role: "coder-model", target: "alias/coder-model", reason: "alias cycle coder-model -> coder-model" },
+	]);
 });
 
-test("rejects a mutual alias cycle", () => {
-	assert.throws(
-		() => aliasesOf({ a: "alias/b", b: "alias/a" }),
-		(error) => error instanceof Error && error.message === 'invalid mapping for "a": alias cycle a -> b -> a',
-	);
+test("skips a mutual alias cycle in both directions and keeps concrete targets", () => {
+	const config = parseAliasConfig({ a: ["p/1", "alias/b"], b: ["p/2", "alias/a"] });
+	assert.deepEqual(config.aliases.get("a"), ["p/1", "p/2"]);
+	assert.deepEqual(config.aliases.get("b"), ["p/2", "p/1"]);
+	assert.deepEqual(config.warnings, [
+		{ role: "b", target: "alias/a", reason: "alias cycle a -> b -> a" },
+		{ role: "a", target: "alias/b", reason: "alias cycle b -> a -> b" },
+	]);
 });
 
-test("attributes a nested cycle to the role that owns it", () => {
-	assert.throws(
-		() =>
-			aliasesOf({
-				r: "alias/x",
-				x: ["p/9", "alias/y"],
-				y: "alias/z",
-				z: "alias/x",
-			}),
-		(error) =>
-			error instanceof Error &&
-			error.message === 'invalid mapping for "x": alias cycle x -> y -> z -> x',
-	);
+test("attributes a nested cycle to the role that owns the cyclic ref", () => {
+	const config = parseAliasConfig({
+		r: "alias/x",
+		x: ["p/9", "alias/y"],
+		y: "alias/z",
+		z: "alias/x",
+	});
+	assert.deepEqual(config.aliases.get("r"), ["p/9"]);
+	assert.deepEqual(config.aliases.get("x"), ["p/9"]);
+	assert.ok(config.warnings.some(
+		(warning) => warning.role === "z" && warning.target === "alias/x" && warning.reason === "alias cycle x -> y -> z -> x",
+	));
 });
 
-test("rejects an unknown nested alias", () => {
-	assert.throws(
-		() => aliasesOf({ "coder-model": "alias/nope" }),
-		(error) =>
-			error instanceof Error &&
-			error.message === 'invalid mapping for "coder-model": unknown alias target "alias/nope"',
-	);
+test("skips an unknown nested alias and warns, keeping the role with an empty chain", () => {
+	const config = parseAliasConfig({ "coder-model": "alias/nope" });
+	assert.deepEqual(config.aliases.get("coder-model"), []);
+	assert.deepEqual(config.warnings, [
+		{ role: "coder-model", target: "alias/nope", reason: 'unknown alias target "alias/nope"' },
+	]);
 });
 
 test("attributes a deeply nested unknown alias to its immediate role", () => {
-	assert.throws(
-		() => aliasesOf({ r: "alias/x", x: "alias/y", y: ["p/1", "alias/ghost"] }),
-		(error) =>
-			error instanceof Error &&
-			error.message === 'invalid mapping for "y": unknown alias target "alias/ghost"',
-	);
+	const config = parseAliasConfig({ r: "alias/x", x: "alias/y", y: ["p/1", "alias/ghost"] });
+	assert.deepEqual(config.aliases.get("r"), ["p/1"]);
+	assert.deepEqual(config.warnings, [
+		{ role: "y", target: "alias/ghost", reason: 'unknown alias target "alias/ghost"' },
+	]);
+});
+
+test("skips alias refs nested deeper than MAX_ALIAS_DEPTH and warns", () => {
+	const config = parseAliasConfig({
+		r0: "alias/r1",
+		r1: "alias/r2",
+		r2: "alias/r3",
+		r3: "alias/r4",
+		r4: ["p/deep", "alias/r5"],
+		r5: "p/deepest",
+	});
+	assert.deepEqual(config.aliases.get("r0"), ["p/deep"]);
+	// One level shallower, the same chain resolves in full.
+	assert.deepEqual(config.aliases.get("r1"), ["p/deep", "p/deepest"]);
+	assert.deepEqual(config.warnings, [
+		{ role: "r4", target: "alias/r5", reason: `alias nesting deeper than ${MAX_ALIAS_DEPTH} levels` },
+	]);
+});
+
+test("depth-cap expansion is declaration-order independent", () => {
+	const deep = {
+		r0: "alias/r1",
+		r1: "alias/r2",
+		r2: "alias/r3",
+		r3: "alias/r4",
+		r4: ["p/deep", "alias/r5"],
+		r5: "p/deepest",
+	};
+	const first = parseAliasConfig(deep);
+	const second = parseAliasConfig(Object.fromEntries(Object.entries(deep).reverse()));
+
+	for (const role of Object.keys(deep)) {
+		assert.deepEqual(second.aliases.get(role), first.aliases.get(role), `chain for "${role}" depends on declaration order`);
+	}
+	const byRole = (left: { role: string }, right: { role: string }) => left.role.localeCompare(right.role);
+	assert.deepEqual([...second.warnings].sort(byRole), [...first.warnings].sort(byRole));
+});
+
+test("expands a pure mutual cycle to empty chains without throwing", () => {
+	const config = parseAliasConfig({ a: ["alias/b"], b: ["alias/a"] });
+	assert.deepEqual(config.aliases.get("a"), []);
+	assert.deepEqual(config.aliases.get("b"), []);
+	assert.equal(config.warnings.length, 2);
+});
+
+test("parses a clean config with no warnings", () => {
+	assert.deepEqual(parseAliasConfig({ a: ["p/1", "alias/b"], b: "p/2" }).warnings, []);
 });
 
 test("expands a string-form nested alias", () => {
@@ -617,6 +664,22 @@ test("formats every failure when all targets are exhausted", async () => {
 			warn: () => undefined,
 		}),
 		(error) => error instanceof Error && error.message === expected,
+	);
+});
+
+test("points at config warnings when the expanded chain is empty", async () => {
+	await assert.rejects(
+		runFallbackChain({
+			role: "empty",
+			targets: [],
+			open: async () => assert.fail("an empty chain must not open a stream"),
+			forward: () => assert.fail("an empty chain must not forward events"),
+			warn: () => assert.fail("an empty chain must not warn per target"),
+		}),
+		(error) =>
+			error instanceof Error &&
+			error.message ===
+				'Model alias "empty" has no usable targets (all skipped during config expansion — see model-alias config warnings)',
 	);
 });
 

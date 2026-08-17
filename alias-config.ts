@@ -13,6 +13,6 @@ export function loadAliasConfig(debugLog: DebugLog): AliasConfig {
 	} catch (error) {
 		debugLog.log("alias-map-error", { mapPath: MAP_PATH, message: describeFailure(error) });
 		console.warn(`[pi-model-alias] No aliases registered; could not load ${MAP_PATH}: ${describeFailure(error)}`);
-		return { aliases: new Map(), timeoutsFor: () => undefined };
+		return { aliases: new Map(), timeoutsFor: () => undefined, warnings: [] };
 	}
 }

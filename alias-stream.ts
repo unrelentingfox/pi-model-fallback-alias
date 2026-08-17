@@ -7,7 +7,6 @@ import {
 	type Context,
 	type Model,
 	type Provider,
-	type ProviderHeaders,
 	type ProviderStreams,
 	type SimpleStreamOptions,
 	type StreamOptions,
@@ -25,10 +24,10 @@ import {
 	type CooldownRegistry,
 	type FailoverEntryData,
 } from "./fallback.ts";
+import { requestOptions, type ResolvedTargetAuth } from "./request-options.ts";
 import type { AliasSession } from "./session-status.ts";
 
 type Registry = ExtensionContext["modelRegistry"];
-type ResolvedAuth = { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> };
 type StreamKind = keyof Pick<ProviderStreams, "stream" | "streamSimple">;
 
 interface AliasStreamDependencies {
@@ -121,7 +120,7 @@ function createFallbackStream(
 
 function openTargetStream(
 	kind: StreamKind,
-	target: { model: Model<Api>; provider: Provider; auth: ResolvedAuth },
+	target: { model: Model<Api>; provider: Provider; auth: ResolvedTargetAuth },
 	context: Context,
 	options: StreamOptions | SimpleStreamOptions | undefined,
 	signal: AbortSignal | undefined,
@@ -141,32 +140,10 @@ async function resolveAuthenticatedTarget(aliasId: string, targetRef: string, re
 	return { ...target, auth };
 }
 
-function requestOptions<T extends StreamOptions | SimpleStreamOptions>(
-	options: T | undefined,
-	auth: ResolvedAuth,
-	signal: AbortSignal | undefined,
-): T {
-	return {
-		...options,
-		signal: signal ?? options?.signal,
-		apiKey: auth.apiKey ?? options?.apiKey,
-		headers: mergeHeaders(auth.headers, options?.headers),
-		env: { ...auth.env, ...options?.env },
-	} as T;
-}
-
 function linkedSignal(userSignal: AbortSignal | undefined, attemptSignal: AbortSignal | undefined): AbortSignal | undefined {
 	if (!userSignal) return attemptSignal;
 	if (!attemptSignal) return userSignal;
 	return AbortSignal.any([userSignal, attemptSignal]);
-}
-
-function mergeHeaders(
-	authHeaders: ProviderHeaders | undefined,
-	requestHeaders: ProviderHeaders | undefined,
-): ProviderHeaders | undefined {
-	if (!authHeaders && !requestHeaders) return undefined;
-	return { ...authHeaders, ...requestHeaders };
 }
 
 function partialFrom(event: AssistantMessageEvent): AssistantMessage | undefined {

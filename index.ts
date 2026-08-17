@@ -4,6 +4,7 @@ import { MAP_PATH, loadAliasConfig } from "./alias-config.ts";
 import { aliasModel, initializeAliasMetadata } from "./alias-model.ts";
 import { createAliasStreams } from "./alias-stream.ts";
 import { registerAliasApiProvider } from "./api-registration.ts";
+import { resolveDelegatedAuth } from "./auth-delegate.ts";
 import { createSharedCooldownRegistry } from "./cooldown-store.ts";
 import { createDebugLog } from "./debug-log.ts";
 import { describeFailure } from "./fallback.ts";
@@ -11,9 +12,11 @@ import { EXTENSION_LATENCY_LOG_PATH, expandLogPaths, readLatencyLog } from "./la
 import { createLatencyReport, createLatencyReportEntry } from "./latency-report.ts";
 import { renderStatusTick, startSession, type AliasSession as StatusSession } from "./session-status.ts";
 import {
+	appendConfigWarningEntry,
 	appendFailoverEntry,
 	appendLatencyReportEntry,
 	appendResetEntry,
+	formatConfigWarning,
 	registerTranscriptRenderers,
 	reportFailover,
 } from "./transcript.ts";
@@ -32,6 +35,7 @@ export type AliasSession = StatusSession<Registry, ExtensionContext["ui"]>;
 export default function piModelAlias(pi: ExtensionAPI): void {
 	const aliasConfig = loadAliasConfig(DEBUG_LOG);
 	const { aliases, timeoutsFor } = aliasConfig;
+	let pendingConfigWarnings = [...aliasConfig.warnings];
 	DEBUG_LOG.log("extension-load", { mapPath: MAP_PATH, aliases: [...aliases.keys()] });
 	if (aliases.size === 0) return;
 
@@ -83,7 +87,10 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 		auth: { apiKey: {
 			name: "Local model alias map",
 			async check() { return { source: MAP_PATH, type: "api_key" }; },
-			async resolve() { return { auth: {}, source: MAP_PATH }; },
+			// Delegate to the first authenticated target in the active role's chain
+			// so registry consumers that hard-require an apiKey (e.g. background
+			// review) can use alias models. Streaming still resolves per-target auth.
+			async resolve() { return resolveDelegatedAuth({ aliases, session, mapPath: MAP_PATH }); },
 		} },
 		models: aliasModels,
 		api: streams,
@@ -96,6 +103,17 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 			publishStatus();
 		}
 		initializeAliasMetadata(aliases, aliasModels, ctx.modelRegistry);
+		// Config warnings render once, for the user only: custom transcript
+		// entries never enter the model context.
+		if (pendingConfigWarnings.length > 0) {
+			const warnings = pendingConfigWarnings;
+			pendingConfigWarnings = [];
+			for (const warning of warnings) {
+				DEBUG_LOG.log("expand-warning", { ...warning });
+				if (!session.hasUI) console.warn(`[pi-model-alias] ${formatConfigWarning(warning)}`);
+				appendConfigWarningEntry(pi, warning, DEBUG_LOG);
+			}
+		}
 	});
 
 	pi.on("model_select", (event, ctx) => {
