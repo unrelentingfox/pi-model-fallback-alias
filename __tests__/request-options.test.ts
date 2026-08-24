@@ -1,21 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { StreamOptions } from "@earendil-works/pi-ai";
+import { ALIAS_GATE_API_KEY } from "../auth-gate.ts";
 import { requestOptions } from "../request-options.ts";
 
-test("never inherits the caller's apiKey when the target auth has none", () => {
-	const options = requestOptions({ apiKey: "DELEGATED-KEY" }, {}, undefined);
+test("never forwards the alias gate when the target auth has no key", () => {
+	const options = requestOptions({ apiKey: ALIAS_GATE_API_KEY }, {}, undefined);
 	assert.equal(options.apiKey, undefined);
 });
 
-test("target auth apiKey wins over the caller's", () => {
-	const options = requestOptions({ apiKey: "DELEGATED-KEY" }, { apiKey: "TARGET-KEY" }, undefined);
+test("target auth apiKey replaces the alias gate", () => {
+	const options = requestOptions({ apiKey: ALIAS_GATE_API_KEY }, { apiKey: "TARGET-KEY" }, undefined);
 	assert.equal(options.apiKey, "TARGET-KEY");
 });
 
 test("target auth env wins over the caller's env", () => {
 	const options = requestOptions(
-		{ env: { AWS_PROFILE: "stale-profile", OTHER: "kept" } },
+		{ apiKey: ALIAS_GATE_API_KEY, env: { AWS_PROFILE: "stale-profile", OTHER: "kept" } },
 		{ env: { AWS_PROFILE: "target-profile" } },
 		undefined,
 	);
@@ -24,7 +25,7 @@ test("target auth env wins over the caller's env", () => {
 
 test("target auth headers win over caller headers, non-auth headers still flow", () => {
 	const options = requestOptions(
-		{ headers: { authorization: "Bearer stale", "x-request-id": "req-1" } },
+		{ apiKey: ALIAS_GATE_API_KEY, headers: { authorization: "Bearer stale", "x-request-id": "req-1" } },
 		{ headers: { authorization: "Bearer target" } },
 		undefined,
 	);

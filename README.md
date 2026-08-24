@@ -21,10 +21,10 @@ JSON file without touching anything else.
   which are flattened into concrete targets when the map loads. Cycles,
   unknown nested aliases, and nesting deeper than 4 levels skip only the
   offending ref (warned in the transcript); the rest of the chain still works
-- **Auth delegation**: the `alias` provider resolves auth by delegating to
-  the first authenticated target in the active role's chain, so registry
-  consumers that require an `apiKey` (e.g. background-review extensions such
-  as pi-hermes-memory, pi-autoname) can use alias models directly
+- **Auth availability gate**: the `alias` provider returns a fixed,
+  non-secret `apiKey` only to mark itself available for registry consumers.
+  Streaming discards that value and resolves the selected target's real auth,
+  so alias models work without depending on the active top-level model
 - **Safe mid-stream semantics**: start/thinking events are buffered until
   real output is forwarded, so a failed thinking-only attempt is discarded
   and retried; once text or tool output flows, failover stops (Pi's stream
@@ -86,26 +86,35 @@ Aliases live in `<agent-dir>/model-alias.json` (usually
   error when used.
 - Edit the map, then `/reload` or restart Pi.
 
-### Auth delegation
+### Auth availability gate
 
 Pi resolves provider auth per provider, so the alias provider cannot know
-which concrete target a request will use. Its auth resolver instead delegates
-to the chain: it picks the session's alias role (or the first alias in the
-map), tries the role's active target first and then the expanded chain in
-order, and returns the first target auth that carries an `apiKey` or
-`headers`. Limits and safety:
+which alias role or concrete target a request will use. Its auth resolver
+returns a fixed, non-secret API-key value that marks the provider as available
+to registry consumers that require an `apiKey`. The gate does not depend on
+the top-level model, active target, or concrete target credentials.
 
-- Pi's `ModelAuth` has no `env` field, so env-only providers (e.g.
-  `AWS_PROFILE`-based bedrock) contribute nothing; when every target is
-  env-only the resolver returns empty auth, exactly as before.
-- The delegated credential is a gate-pass for registry consumers only.
-  Streaming re-resolves each target's own auth, and request assembly never
-  inherits a caller-supplied `apiKey`; target auth wins over caller `env`,
-  and credential headers (`authorization`, `x-api-key`, `api-key`,
-  `x-goog-api-key`, `anthropic-*`) are stripped from caller headers before
-  the merge — remaining caller headers only fill gaps the target's auth does
-  not define. This keeps a credential resolved for one target from leaking
-  onto another provider's request after failover.
+Streaming remains the authoritative authentication path. It resolves the
+requested alias role, selects a concrete target, and gets that target's real
+auth before opening the stream. Request assembly never forwards the gate:
+
+- The caller-supplied `apiKey` is dropped.
+- Target auth replaces caller `env` values.
+- Credential headers (`authorization`, `x-api-key`, `api-key`,
+  `x-goog-api-key`, `anthropic-*`) are stripped from caller headers.
+- Remaining caller headers only fill gaps that target auth does not define.
+
+This boundary supports env-only targets such as `AWS_PROFILE`-based Bedrock
+without leaking a credential between providers after failover. It can also
+make an alias appear available before its concrete target credentials are
+proven. In that case, stream-time target resolution returns the precise auth
+failure for the requested role.
+
+> [!IMPORTANT]
+> Consumers must call the alias provider's `stream()` or `streamSimple()` after
+> auth lookup. The returned `apiKey` is only an availability gate; it is not a
+> credential and must not be sent directly to an HTTP API or provider SDK. The
+> alias stream discards the gate and resolves the selected target's real auth.
 
 ## Usage
 

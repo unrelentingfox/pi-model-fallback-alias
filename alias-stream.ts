@@ -17,7 +17,6 @@ import type { DebugLog } from "./debug-log.ts";
 import {
 	describeFailure,
 	failureStopReason,
-	resolveTargetReference,
 	runFallbackChain,
 	type AliasMap,
 	type AttemptTimeouts,
@@ -26,6 +25,7 @@ import {
 } from "./fallback.ts";
 import { requestOptions, type ResolvedTargetAuth } from "./request-options.ts";
 import type { AliasSession } from "./session-status.ts";
+import { resolveAuthenticatedTarget } from "./target-auth.ts";
 
 type Registry = ExtensionContext["modelRegistry"];
 type StreamKind = keyof Pick<ProviderStreams, "stream" | "streamSimple">;
@@ -129,15 +129,6 @@ function openTargetStream(
 	return kind === "streamSimple"
 		? target.provider.streamSimple(target.model, context, request as SimpleStreamOptions)
 		: target.provider.stream(target.model, context, request);
-}
-
-async function resolveAuthenticatedTarget(aliasId: string, targetRef: string, registry: Registry) {
-	const target = resolveTargetReference(aliasId, targetRef, registry);
-	const auth = await registry.getApiKeyAndHeaders(target.model);
-	if (!auth.ok) {
-		throw new Error(`Model alias "${aliasId}" target "${targetRef}" is unavailable: ${auth.error}`);
-	}
-	return { ...target, auth };
 }
 
 function linkedSignal(userSignal: AbortSignal | undefined, attemptSignal: AbortSignal | undefined): AbortSignal | undefined {

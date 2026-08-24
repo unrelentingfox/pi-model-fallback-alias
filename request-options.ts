@@ -18,8 +18,8 @@ const CREDENTIAL_HEADER_NAMES = new Set(["authorization", "x-api-key", "api-key"
 /**
  * Assemble the per-target request options from the caller's options and the
  * target's own resolved auth. Target auth always wins: the alias provider's
- * delegated credential (see auth-delegate.ts) echoes back through caller
- * options, so the caller's apiKey is dropped entirely, credential headers are
+ * availability gate (see auth-gate.ts) echoes back through caller options, so
+ * the caller's apiKey is dropped entirely, credential headers are
  * stripped from the caller's headers, and caller env/headers only fill gaps
  * the target's auth does not define.
  */

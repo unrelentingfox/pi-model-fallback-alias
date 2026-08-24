@@ -4,7 +4,7 @@ import { MAP_PATH, loadAliasConfig } from "./alias-config.ts";
 import { aliasModel, initializeAliasMetadata } from "./alias-model.ts";
 import { createAliasStreams } from "./alias-stream.ts";
 import { registerAliasApiProvider } from "./api-registration.ts";
-import { resolveDelegatedAuth } from "./auth-delegate.ts";
+import { createAliasAuth } from "./auth-gate.ts";
 import { createSharedCooldownRegistry } from "./cooldown-store.ts";
 import { createDebugLog } from "./debug-log.ts";
 import { describeFailure } from "./fallback.ts";
@@ -84,14 +84,9 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	pi.registerProvider(createProvider({
 		id: PROVIDER_ID,
 		name: "Model Aliases",
-		auth: { apiKey: {
-			name: "Local model alias map",
-			async check() { return { source: MAP_PATH, type: "api_key" }; },
-			// Delegate to the first authenticated target in the active role's chain
-			// so registry consumers that hard-require an apiKey (e.g. background
-			// review) can use alias models. Streaming still resolves per-target auth.
-			async resolve() { return resolveDelegatedAuth({ aliases, session, mapPath: MAP_PATH }); },
-		} },
+		// Registry consumers receive a non-secret availability gate. Streaming
+		// drops it and resolves the selected target's real auth.
+		auth: createAliasAuth(MAP_PATH),
 		models: aliasModels,
 		api: streams,
 	}));
