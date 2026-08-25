@@ -136,6 +136,27 @@ model: alias/coder
 - `/reset-model-cooldown` — clear all target cooldowns (every process sees
   the reset); appends a confirmation entry to the transcript.
 
+### Response identity and usage
+
+Forwarded assistant messages use the logical alias identity in `api`,
+`provider`, and `model`. This keeps session restore and subagent model
+verification on `alias/<role>`, even when a concrete target answered.
+`responseModel` keeps the concrete target model ID; an existing value from the
+target is preserved, otherwise the target event's original `model` is used.
+The footer, debug log, latency records, and failover transcript entries retain
+the provider-qualified concrete target reference.
+
+`@tmustier/pi-usage-extension` 0.9.4 keeps totals and nested-agent
+reconciliation correct because it reads the preserved `usage` data. New
+attribution groups by alias role, so a concrete failover behind an alias does
+not appear as a model switch. Historical sessions can show both concrete and
+alias groups. Use alias status or logs for concrete attribution.
+
+Concrete per-target usage grouping is a non-blocking upstream follow-up. It
+needs provider-qualified target metadata and parser, aggregation, migration,
+and malformed-data fallback support in the usage extension. This extension
+keeps `responseModel` model-only and does not change that package.
+
 ## Troubleshooting
 
 - **Footer target or cooldown looks stale** — the short label is the current
@@ -147,25 +168,31 @@ model: alias/coder
   (1 MiB rotation, previous file kept as `.old`).
 - **Cooldown state** — `logs/cooldown-state.json`; entries expire on their
   own and stale entries are pruned after an hour.
+- **A restored session cannot find its alias** — add the removed role back to
+  `model-alias.json`, select a current model, or start a new session. Persisted
+  assistant messages intentionally retain the logical alias for session restore.
 
 ## Development
 
 Requires Node 22.18 or later because Node type stripping runs both the tests and the `.mjs` report CLI.
 
 ```bash
-node --test __tests__/*.test.ts
+node --import ./scripts/pi-resolve.mjs --test __tests__/*.test.ts
 bash scripts/typecheck.sh
 ```
 
-`typecheck.sh` finds the installed Pi runtime and its Node type definitions. It
-writes a temporary local override, so `tsconfig.json` stays portable.
+`pi-resolve.mjs` and `typecheck.sh` find the installed Pi runtime. Set
+`PI_ROOT` to override the package location. The type-check script uses Pi's
+Node type definitions and writes a temporary local override, so
+`tsconfig.json` stays portable.
 
 Module layout: `index.ts` (composition root), `alias-config.ts` (map
 loading), `alias-model.ts` (model factory + metadata), `alias-stream.ts`
 (fallback stream orchestration), `fallback.ts` (chain policy + cooldown
 registry), `cooldown-store.ts` (shared file-backed store), `transcript.ts`
 (entries + renderers), `session-status.ts` / `status.ts` (footer),
-`debug-log.ts` (JSONL logging).
+`debug-log.ts` (JSONL logging), `scripts/pi-resolve.mjs` (standalone test
+module resolution).
 
 ## Latency timeouts
 

@@ -94,8 +94,9 @@ function createFallbackStream(
 			}
 		},
 		forward: (event) => {
-			lastPartial = partialFrom(event) ?? lastPartial;
-			output.push(event);
+			const forwarded = withAliasIdentity(event, aliasModel);
+			lastPartial = partialFrom(forwarded) ?? lastPartial;
+			output.push(forwarded);
 		},
 		timeoutsFor: () => timeoutsFor(aliasModel.id),
 		onLatency: (sample) => debugLog.log("attempt-latency", sample),
@@ -135,6 +136,26 @@ function linkedSignal(userSignal: AbortSignal | undefined, attemptSignal: AbortS
 	if (!userSignal) return attemptSignal;
 	if (!attemptSignal) return userSignal;
 	return AbortSignal.any([userSignal, attemptSignal]);
+}
+
+function withAliasIdentity(event: AssistantMessageEvent, aliasModel: Model<Api>): AssistantMessageEvent {
+	if (event.type === "done") {
+		return { ...event, message: withAliasMessageIdentity(event.message, aliasModel) };
+	}
+	if (event.type === "error") {
+		return { ...event, error: withAliasMessageIdentity(event.error, aliasModel) };
+	}
+	return { ...event, partial: withAliasMessageIdentity(event.partial, aliasModel) };
+}
+
+function withAliasMessageIdentity(message: AssistantMessage, aliasModel: Model<Api>): AssistantMessage {
+	return {
+		...message,
+		api: aliasModel.api,
+		provider: aliasModel.provider,
+		model: aliasModel.id,
+		responseModel: message.responseModel ?? message.model,
+	};
 }
 
 function partialFrom(event: AssistantMessageEvent): AssistantMessage | undefined {
