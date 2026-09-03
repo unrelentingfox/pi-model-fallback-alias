@@ -33,6 +33,7 @@ type StreamKind = keyof Pick<ProviderStreams, "stream" | "streamSimple">;
 interface AliasStreamDependencies {
 	aliases: AliasMap;
 	timeoutsFor(role: string): AttemptTimeouts | undefined;
+	cooldownResetSuccesses: number;
 	aliasModels: Model<Api>[];
 	session: AliasSession<Registry, ExtensionContext["ui"]>;
 	cooldowns: CooldownRegistry;
@@ -59,7 +60,7 @@ function createFallbackStream(
 	dependencies: AliasStreamDependencies,
 ): AssistantMessageEventStream {
 	const output = createAssistantMessageEventStream();
-	const { aliases, timeoutsFor, aliasModels, session, cooldowns, debugLog, onFailover } = dependencies;
+	const { aliases, timeoutsFor, cooldownResetSuccesses, aliasModels, session, cooldowns, debugLog, onFailover } = dependencies;
 	const registry = session.registry;
 	if (!registry) {
 		const error = new Error(`Model alias "${aliasModel.id}" cannot stream before a session starts in this process`);
@@ -99,6 +100,7 @@ function createFallbackStream(
 			output.push(forwarded);
 		},
 		timeoutsFor: () => timeoutsFor(aliasModel.id),
+		cooldownResetSuccesses,
 		onLatency: (sample) => debugLog.log("attempt-latency", sample),
 		onTimeout: (targetRef, reason) => debugLog.log("attempt-timeout", { role: aliasModel.id, targetRef, reason }),
 		warn: (failedTarget, reason, nextTarget, cooldown) =>

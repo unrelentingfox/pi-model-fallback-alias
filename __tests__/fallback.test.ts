@@ -338,6 +338,108 @@ test("resets a target cooldown when its stream commits", async () => {
 	assert.deepEqual(failCounts, [1, 1]);
 });
 
+test("keeps a target cooling until it reaches the configured success threshold", async () => {
+	const cooldowns = createCooldownRegistry(() => 0);
+	cooldowns.recordFailure("flaky/model");
+	const run = () =>
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			cooldownResetSuccesses: 3,
+			open: async () => events({ type: "text_start" }, { type: "done", message: "ok" }),
+			forward: () => undefined,
+			warn: () => undefined,
+		});
+
+	await run();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 1);
+	await run();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 2);
+	await run();
+	assert.equal(cooldowns.state("flaky/model"), undefined);
+});
+
+test("an intervening failure resets the success streak toward the configured threshold", async () => {
+	const cooldowns = createCooldownRegistry(() => 0);
+	cooldowns.recordFailure("flaky/model");
+	const succeed = () =>
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			cooldownResetSuccesses: 3,
+			open: async () => events({ type: "text_start" }, { type: "done", message: "ok" }),
+			forward: () => undefined,
+			warn: () => undefined,
+		});
+
+	await succeed();
+	await succeed();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 2);
+
+	await assert.rejects(
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			cooldownResetSuccesses: 3,
+			open: async () => throwBeforeEvent("flaky again"),
+			forward: () => undefined,
+			warn: () => undefined,
+		}),
+	);
+	assert.equal(cooldowns.state("flaky/model")!.successCount, undefined);
+
+	await succeed();
+	await succeed();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 2);
+});
+
+test("a post-commit failure resets an in-progress success streak", async () => {
+	const cooldowns = createCooldownRegistry(() => 0);
+	cooldowns.recordFailure("flaky/model");
+	const succeed = () =>
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			cooldownResetSuccesses: 3,
+			open: async () => events({ type: "text_start" }, { type: "done", message: "ok" }),
+			forward: () => undefined,
+			warn: () => undefined,
+		});
+	await succeed();
+	await succeed();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 2);
+
+	await assert.rejects(
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			cooldownResetSuccesses: 3,
+			open: async () => emitTwoThenThrow(),
+			forward: () => undefined,
+			warn: () => assert.fail("a post-commit failure must not warn about failover"),
+		}),
+		/stream broke/u,
+	);
+	assert.equal(cooldowns.state("flaky/model")!.successCount, undefined);
+});
+
+test("parses a configured $defaults.cooldownResetSuccesses and keeps the default of one", () => {
+	const withDefault = parseAliasConfig({ role: "good/model" });
+	assert.equal(withDefault.cooldownResetSuccesses, 1);
+
+	const withThreshold = parseAliasConfig({ $defaults: { cooldownResetSuccesses: 5 }, role: "good/model" });
+	assert.equal(withThreshold.cooldownResetSuccesses, 5);
+
+	assert.throws(() => parseAliasConfig({ $defaults: { cooldownResetSuccesses: 0 } }), /invalid mapping for "\$defaults"/u);
+	assert.throws(() => parseAliasConfig({ $defaults: { cooldownResetSuccesses: 1.5 } }), /invalid mapping for "\$defaults"/u);
+});
+
+
 test("skips a target while its cooldown is active", async () => {
 	const cooldowns = createCooldownRegistry(() => 0);
 	const opened: string[] = [];

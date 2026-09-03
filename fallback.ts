@@ -19,6 +19,7 @@ export interface TimerApi {
 
 export interface AliasConfig {
 	aliases: AliasMap;
+	cooldownResetSuccesses: number;
 	timeoutsFor(role: string): AttemptTimeouts | undefined;
 	warnings: readonly AliasExpansionWarning[];
 }
@@ -43,6 +44,7 @@ export interface FailoverEntryData {
 export interface CooldownState {
 	failCount: number;
 	nextRetryAt: number;
+	successCount?: number;
 }
 
 export interface CooldownUpdate extends CooldownState {
@@ -52,7 +54,8 @@ export interface CooldownUpdate extends CooldownState {
 export interface CooldownRegistry {
 	isActive(target: string): boolean;
 	recordFailure(target: string): CooldownUpdate;
-	reset(target: string): void;
+	recordSuccess(target: string, resetAfter: number): void;
+	resetSuccesses(target: string): void;
 	clearAll(): number;
 	state(target: string): CooldownState | undefined;
 }
@@ -98,6 +101,7 @@ export interface FallbackOptions<Event extends StreamEventLike> {
 	role: string;
 	targets: readonly string[];
 	cooldowns?: CooldownRegistry;
+	cooldownResetSuccesses?: number;
 	signal?: Pick<AbortSignal, "aborted">;
 	open(target: string, attemptSignal?: AbortSignal): Promise<AsyncIterable<Event>>;
 	forward(event: Event): void | Promise<void>;
@@ -148,8 +152,20 @@ export function createCooldownRegistry(now: () => number = Date.now): CooldownRe
 			entries.set(target, { failCount: update.failCount, nextRetryAt: update.nextRetryAt });
 			return update;
 		},
-		reset(target) {
-			entries.delete(target);
+		recordSuccess(target, resetAfter) {
+			const entry = entries.get(target);
+			if (!entry) return;
+			const successCount = (entry.successCount ?? 0) + 1;
+			if (successCount >= resetAfter) {
+				entries.delete(target);
+				return;
+			}
+			entries.set(target, { ...entry, successCount });
+		},
+		resetSuccesses(target) {
+			const entry = entries.get(target);
+			if (!entry || entry.successCount === undefined) return;
+			entries.set(target, { failCount: entry.failCount, nextRetryAt: entry.nextRetryAt });
 		},
 		clearAll() {
 			const nowMs = now();
@@ -181,12 +197,13 @@ export function parseAliasConfig(value: unknown): AliasConfig {
 		if (role === "$defaults") continue;
 		const config = parseRoleConfig(role, configuredTargets);
 		aliases.set(role, config.targets);
-		const timeouts = mergeTimeouts(defaults, config.timeouts);
+		const timeouts = mergeTimeouts(defaults.timeouts, config.timeouts);
 		if (timeouts) roleTimeouts.set(role, timeouts);
 	}
 	const expanded = expandNestedAliases(aliases);
 	return {
 		aliases: expanded.aliases,
+		cooldownResetSuccesses: defaults.cooldownResetSuccesses,
 		timeoutsFor(role) {
 			return roleTimeouts.get(role);
 		},
@@ -305,9 +322,14 @@ async function forwardSingleTarget<Event extends StreamEventLike>(
 			if (!committed && isCommitEvent(event)) {
 				committed = true;
 				latency.commit();
-				if (!failureRecorded) cooldowns.reset(target);
 			}
-			if (committed && isFailureEvent(event)) outcome = "committed-failure";
+			if (!failureRecorded && isSuccessfulTerminal(event)) {
+				cooldowns.recordSuccess(target, options.cooldownResetSuccesses ?? 1);
+			}
+			if (committed && isFailureEvent(event)) {
+				cooldowns.resetSuccesses(target);
+				outcome = "committed-failure";
+			}
 			await options.forward(event);
 		}
 	} catch (error) {
@@ -315,6 +337,7 @@ async function forwardSingleTarget<Event extends StreamEventLike>(
 		if (!committed && !failureRecorded && failureStopReason(error, options.signal) !== "aborted") {
 			warnCooldown(options, target, describeFailure(error), undefined, cooldowns);
 		}
+		if (committed && failureStopReason(error, options.signal) !== "aborted") cooldowns.resetSuccesses(target);
 		throw error;
 	} finally {
 		latency.emit(outcome);
@@ -392,6 +415,7 @@ async function attemptTarget<Event extends StreamEventLike>(
 				watchdog?.disarm();
 				await flush(buffered, options.forward);
 				await options.forward(event);
+				if (isSuccessfulTerminal(event)) cooldowns.recordSuccess(target, options.cooldownResetSuccesses ?? 1);
 				outcome = "complete";
 				return { kind: "complete" };
 			}
@@ -399,6 +423,7 @@ async function attemptTarget<Event extends StreamEventLike>(
 				latency.recordUsage(event);
 				watchdog?.disarm();
 				if (committed) {
+					cooldowns.resetSuccesses(target);
 					await options.forward(event);
 					outcome = "committed-failure";
 					return { kind: "committed-failure" };
@@ -415,7 +440,6 @@ async function attemptTarget<Event extends StreamEventLike>(
 				await flush(buffered, options.forward);
 				committed = true;
 				latency.commit();
-				cooldowns.reset(target);
 			}
 			await options.forward(event);
 		}
@@ -432,6 +456,7 @@ async function attemptTarget<Event extends StreamEventLike>(
 			return { kind: "retryable-failure", reason };
 		}
 		if (committed || failureStopReason(error, options.signal) === "aborted") {
+			if (committed && failureStopReason(error, options.signal) !== "aborted") cooldowns.resetSuccesses(target);
 			outcome = "unsafe-throw";
 			return { kind: "unsafe-throw", error };
 		}
@@ -558,12 +583,21 @@ async function flush<Event>(events: Event[], forward: (event: Event) => void | P
 	events.length = 0;
 }
 
-function parseDefaults(value: unknown): AttemptTimeouts | undefined {
-	if (value === undefined) return undefined;
-	if (!isRecord(value) || Object.keys(value).some((key) => key !== "timeouts")) {
+interface AliasDefaults {
+	cooldownResetSuccesses: number;
+	timeouts?: AttemptTimeouts;
+}
+
+function parseDefaults(value: unknown): AliasDefaults {
+	if (value === undefined) return { cooldownResetSuccesses: 1 };
+	if (!isRecord(value) || Object.keys(value).some((key) => key !== "timeouts" && key !== "cooldownResetSuccesses")) {
 		throw new Error('invalid mapping for "$defaults"');
 	}
-	return parseTimeouts("$defaults", value.timeouts);
+	const cooldownResetSuccesses = value.cooldownResetSuccesses === undefined ? 1 : value.cooldownResetSuccesses;
+	if (typeof cooldownResetSuccesses !== "number" || !Number.isSafeInteger(cooldownResetSuccesses) || cooldownResetSuccesses < 1) {
+		throw new Error('invalid mapping for "$defaults"');
+	}
+	return { cooldownResetSuccesses, timeouts: parseTimeouts("$defaults", value.timeouts) };
 }
 
 function parseRoleConfig(role: string, value: unknown): { targets: readonly string[]; timeouts?: AttemptTimeouts } {

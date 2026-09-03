@@ -67,6 +67,7 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	const streams = createAliasStreams({
 		aliases,
 		timeoutsFor,
+		cooldownResetSuccesses: aliasConfig.cooldownResetSuccesses,
 		aliasModels,
 		session,
 		cooldowns: TARGET_COOLDOWNS,

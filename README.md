@@ -30,9 +30,13 @@ JSON file without touching anything else.
   and retried; once text or tool output flows, failover stops (Pi's stream
   consumer cannot reset after that point)
 - **Failure cooldowns**: failed targets back off starting at 30 seconds,
-  doubling to a 30-minute cap; a successful stream commit resets the count.
-  Cooled targets are skipped while alternatives remain, retried before
-  exhaustion, and attempted immediately if the whole chain is cooling
+  doubling to a 30-minute cap. By default, one successful request resets the
+  count; set `$defaults.cooldownResetSuccesses` to require more consecutive
+  successes before a target's cooldown clears. Any failure — before or after
+  the stream commits — resets that success streak back to zero, so only an
+  uninterrupted run of successes clears the cooldown. Cooled targets are
+  skipped while alternatives remain, retried before exhaustion, and attempted
+  immediately if the whole chain is cooling
 - **Cross-process cooldown store**: cooldown state is shared through
   `logs/cooldown-state.json` (atomic writes, mtime-based reload), so main
   sessions and subagent processes see each other's failures
@@ -225,6 +229,34 @@ the final target in a chain are never aborted for latency. Timers stop when
 text or tool output commits, so this extension never swaps providers after
 partial output reaches Pi. A latency timeout records the normal shared
 cooldown (30 seconds to 30 minutes), and the next request can skip that target.
+
+## Cooldown reset threshold
+
+By default, a target's cooldown clears after one successful request (a
+stream that reaches its `done` terminal event without an intervening
+failure). Set `$defaults.cooldownResetSuccesses` to require more consecutive
+successes before a flaky target is treated as healthy again:
+
+```json
+{
+  "$defaults": {
+    "cooldownResetSuccesses": 3
+  },
+  "coder": [
+    "provider-example/model-fallback",
+    "amazon-bedrock/model-fallback"
+  ]
+}
+```
+
+`cooldownResetSuccesses` is a positive integer applying to every concrete
+target (cooldowns are shared across roles and processes, so the threshold is
+too). Any failure on a cooling target — whether it happens before the stream
+commits (triggering a new cooldown) or after commit (a post-commit failure
+that does not extend the cooldown) — resets that target's success count to
+zero. Only an uninterrupted run of `cooldownResetSuccesses` successful
+requests clears the cooldown early; a still-failing target otherwise remains
+available again once its normal exponential backoff window expires.
 
 ## Measuring latency
 

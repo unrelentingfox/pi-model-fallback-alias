@@ -60,13 +60,30 @@ export function createSharedCooldownRegistry(options: SharedCooldownOptions = {}
 			store.log("cooldown-record", { targetRef: target, ...update });
 			return update;
 		},
-		reset(target) {
+		recordSuccess(target, resetAfter) {
 			const now = store.now();
 			const entries = store.reload();
-			if (!(target in entries)) return;
-			delete entries[target];
+			const entry = entries[target];
+			if (!entry) return;
+			const successCount = (entry.successCount ?? 0) + 1;
+			store.prepareWrite();
+			if (successCount >= resetAfter) {
+				delete entries[target];
+				store.write(entries, now);
+				store.log("cooldown-reset", { targetRef: target });
+				return;
+			}
+			entries[target] = { ...entry, successCount };
 			store.write(entries, now);
-			store.log("cooldown-reset", { targetRef: target });
+			store.log("cooldown-success", { targetRef: target, successCount, resetAfter });
+		},
+		resetSuccesses(target) {
+			const entries = store.reload();
+			const entry = entries[target];
+			if (!entry || entry.successCount === undefined) return;
+			store.prepareWrite();
+			entries[target] = { failCount: entry.failCount, nextRetryAt: entry.nextRetryAt };
+			store.write(entries, store.now());
 		},
 		clearAll() {
 			const entries = store.reload();
@@ -184,6 +201,9 @@ function fileMtime(path: string, fs: CooldownStoreFs): number | undefined {
 
 function isCooldownState(value: unknown): value is CooldownState {
 	if (!isRecord(value)) return false;
+	if (value.successCount !== undefined && (typeof value.successCount !== "number" || !Number.isFinite(value.successCount))) {
+		return false;
+	}
 	return (
 		typeof value.failCount === "number" &&
 		Number.isFinite(value.failCount) &&
