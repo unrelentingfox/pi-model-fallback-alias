@@ -8,7 +8,7 @@ This package does not yet exist on npm, so OpenID Connect (OIDC) trusted publish
 2. Run all checks and inspect `npm pack --dry-run --json`.
 3. Publish `0.1.0` once with `npm publish --access public` and two-factor authentication.
 4. On npm, configure the trusted publisher for:
-   - Repository: `unrelentingfox/pi-model-fallback-aliases`
+   - Repository: `unrelentingfox/pi-model-fallback-alias`
    - Workflow: `release.yml`
    - Environment: `npm`
 5. Keep the GitHub `npm` environment enabled.

@@ -1,5 +1,5 @@
 {
-  "name": "@unrelentingfox/pi-model-fallback-aliases",
+  "name": "@unrelentingfox/pi-model-fallback-alias",
   "version": "0.1.0",
   "description": "Stable Pi model aliases with ordered fallback, cooldowns, and latency controls",
   "license": "MIT",
@@ -23,11 +23,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/unrelentingfox/pi-model-fallback-aliases.git"
+    "url": "git+https://github.com/unrelentingfox/pi-model-fallback-alias.git"
   },
-  "homepage": "https://github.com/unrelentingfox/pi-model-fallback-aliases#readme",
+  "homepage": "https://github.com/unrelentingfox/pi-model-fallback-alias#readme",
   "bugs": {
-    "url": "https://github.com/unrelentingfox/pi-model-fallback-aliases/issues"
+    "url": "https://github.com/unrelentingfox/pi-model-fallback-alias/issues"
   },
   "engines": {
     "node": ">=22.19.0"

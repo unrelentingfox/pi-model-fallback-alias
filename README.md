@@ -10,7 +10,7 @@ durable transcript warnings without owning target-provider credentials.
 Requires Node 22.19 or newer and is tested against Pi 0.84.4.
 
 ```bash
-pi install npm:@unrelentingfox/pi-model-fallback-aliases@0.1.0
+pi install npm:@unrelentingfox/pi-model-fallback-alias@0.1.0
 ```
 
 Run `/reload` in a live session after installation or configuration changes.
@@ -76,7 +76,7 @@ Use an alias anywhere Pi accepts a model reference:
 Runtime state is outside the installed package. The default directory is:
 
 ```text
-<agent-dir>/state/pi-model-fallback-aliases/
+<agent-dir>/state/pi-model-fallback-alias/
 ```
 
 Set `PI_MODEL_ALIAS_STATE_DIR` to an absolute or relative path to override it.
@@ -143,7 +143,7 @@ GitHub releases trigger an OpenID Connect (OIDC) trusted publish with
 provenance. Follow [RELEASING.md](RELEASING.md) and update
 [CHANGELOG.md](CHANGELOG.md).
 
-Repository: https://github.com/unrelentingfox/pi-model-fallback-aliases
+Repository: https://github.com/unrelentingfox/pi-model-fallback-alias
 
 ## License
 
