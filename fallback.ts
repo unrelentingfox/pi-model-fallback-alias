@@ -1,4 +1,4 @@
-import type { LatencyOutcome, LatencySample, TimeoutKind } from "./latency-stats.ts";
+import type { LatencyOutcome, LatencySample, ProviderResponseMetadata, TimeoutKind } from "./latency-stats.ts";
 
 export type AliasMap = ReadonlyMap<string, readonly string[]>;
 
@@ -17,10 +17,28 @@ export interface TimerApi {
 	clearTimeout(handle: TimerHandle): void;
 }
 
+/** Cooldown growth and recovery rules for one requested alias. */
+export interface CooldownPolicy {
+	baseMs: number;
+	capMs: number;
+	resetSuccesses: number;
+}
+
+/** Fully resolved policy: built-in defaults, then `$defaults`, then alias overrides. */
+export interface AliasPolicy {
+	timeouts?: AttemptTimeouts;
+	cooldown: CooldownPolicy;
+}
+
+/** Partial policy as written in `$defaults` or an object-form alias entry. */
+export interface AliasPolicyInput {
+	timeouts?: AttemptTimeouts;
+	cooldown?: Partial<CooldownPolicy>;
+}
+
 export interface AliasConfig {
 	aliases: AliasMap;
-	cooldownResetSuccesses: number;
-	timeoutsFor(role: string): AttemptTimeouts | undefined;
+	policyFor(role: string): AliasPolicy;
 	warnings: readonly AliasExpansionWarning[];
 }
 
@@ -31,7 +49,7 @@ export interface AliasExpansionWarning {
 	reason: string;
 }
 
-export interface FailoverEntryData {
+export interface FailoverEntryData extends Partial<ProviderResponseMetadata> {
 	role: string;
 	failedTarget: string;
 	nextTarget?: string;
@@ -53,7 +71,7 @@ export interface CooldownUpdate extends CooldownState {
 
 export interface CooldownRegistry {
 	isActive(target: string): boolean;
-	recordFailure(target: string): CooldownUpdate;
+	recordFailure(target: string, cooldown?: CooldownPolicy): CooldownUpdate;
 	recordSuccess(target: string, resetAfter: number): void;
 	resetSuccesses(target: string): void;
 	clearAll(): number;
@@ -101,13 +119,13 @@ export interface FallbackOptions<Event extends StreamEventLike> {
 	role: string;
 	targets: readonly string[];
 	cooldowns?: CooldownRegistry;
-	cooldownResetSuccesses?: number;
+	/** Resolved policy of the requested alias; omitted means built-in defaults. */
+	policy?: AliasPolicy;
 	signal?: Pick<AbortSignal, "aborted">;
 	open(target: string, attemptSignal?: AbortSignal): Promise<AsyncIterable<Event>>;
 	forward(event: Event): void | Promise<void>;
 	warn(failedTarget: string, reason: string, nextTarget: string | undefined, cooldown: CooldownUpdate): void;
 	snapshot?(event: Event): Event;
-	timeoutsFor?(target: string): AttemptTimeouts | undefined;
 	timers?: TimerApi;
 	now?: () => number;
 	onLatency?(sample: AttemptLatencySample): void;
@@ -136,9 +154,17 @@ const DEFAULT_TIMERS: TimerApi = {
 	},
 };
 
-const COOLDOWN_BASE_MS = 30_000;
-const COOLDOWN_CAP_MS = 30 * 60_000;
-const MAX_UNCAPPED_EXPONENT = 6;
+export const COOLDOWN_BASE_MS = 5 * 60_000;
+export const COOLDOWN_CAP_MS = 60 * 60_000;
+
+/** Policy used when a config supplies no cooldown fields. */
+export const BUILT_IN_COOLDOWN_POLICY: CooldownPolicy = {
+	baseMs: COOLDOWN_BASE_MS,
+	capMs: COOLDOWN_CAP_MS,
+	resetSuccesses: 1,
+};
+
+export const BUILT_IN_POLICY: AliasPolicy = { cooldown: BUILT_IN_COOLDOWN_POLICY };
 
 export function createCooldownRegistry(now: () => number = Date.now): CooldownRegistry {
 	const entries = new Map<string, CooldownState>();
@@ -147,8 +173,8 @@ export function createCooldownRegistry(now: () => number = Date.now): CooldownRe
 			const entry = entries.get(target);
 			return entry !== undefined && entry.nextRetryAt > now();
 		},
-		recordFailure(target) {
-			const update = nextCooldown(entries.get(target), now());
+		recordFailure(target, cooldown) {
+			const update = nextCooldown(entries.get(target), now(), cooldown);
 			entries.set(target, { failCount: update.failCount, nextRetryAt: update.nextRetryAt });
 			return update;
 		},
@@ -180,32 +206,42 @@ export function createCooldownRegistry(now: () => number = Date.now): CooldownRe
 	};
 }
 
-export function nextCooldown(previous: CooldownState | undefined, now: number): CooldownUpdate {
+export function nextCooldown(
+	previous: CooldownState | undefined,
+	now: number,
+	cooldown: CooldownPolicy = BUILT_IN_COOLDOWN_POLICY,
+): CooldownUpdate {
 	const failCount = (previous?.failCount ?? 0) + 1;
-	const exponent = Math.min(failCount - 1, MAX_UNCAPPED_EXPONENT);
-	const durationMs = Math.min(COOLDOWN_BASE_MS * 2 ** exponent, COOLDOWN_CAP_MS);
-	return { failCount, nextRetryAt: now + durationMs, durationMs };
+	// Cooldown state is shared, so a shorter alias policy must never pull an
+	// active retry time closer than another alias already set.
+	const nextRetryAt = Math.max(previous?.nextRetryAt ?? 0, now + growthMs(failCount, cooldown));
+	return { failCount, nextRetryAt, durationMs: nextRetryAt - now };
+}
+
+function growthMs(failCount: number, cooldown: CooldownPolicy): number {
+	const { baseMs, capMs } = cooldown;
+	// Stop doubling once the cap binds, so the exponent stays small for any valid pair.
+	const exponent = Math.min(failCount - 1, Math.max(0, Math.ceil(Math.log2(capMs / baseMs))));
+	return Math.min(baseMs * 2 ** exponent, capMs);
 }
 
 export function parseAliasConfig(value: unknown): AliasConfig {
 	if (!isRecord(value)) throw new Error("expected a JSON object");
 
-	const defaults = parseDefaults(value.$defaults);
+	const defaults = resolvePolicy("$defaults", BUILT_IN_POLICY, parseDefaultsPolicy(value.$defaults));
 	const aliases = new Map<string, readonly string[]>();
-	const roleTimeouts = new Map<string, AttemptTimeouts>();
+	const rolePolicies = new Map<string, AliasPolicy>();
 	for (const [role, configuredTargets] of Object.entries(value)) {
 		if (role === "$defaults") continue;
 		const config = parseRoleConfig(role, configuredTargets);
 		aliases.set(role, config.targets);
-		const timeouts = mergeTimeouts(defaults.timeouts, config.timeouts);
-		if (timeouts) roleTimeouts.set(role, timeouts);
+		rolePolicies.set(role, resolvePolicy(role, defaults, config.policy));
 	}
 	const expanded = expandNestedAliases(aliases);
 	return {
 		aliases: expanded.aliases,
-		cooldownResetSuccesses: defaults.cooldownResetSuccesses,
-		timeoutsFor(role) {
-			return roleTimeouts.get(role);
+		policyFor(role) {
+			return rolePolicies.get(role) ?? defaults;
 		},
 		warnings: expanded.warnings,
 	};
@@ -324,7 +360,7 @@ async function forwardSingleTarget<Event extends StreamEventLike>(
 				latency.commit();
 			}
 			if (!failureRecorded && isSuccessfulTerminal(event)) {
-				cooldowns.recordSuccess(target, options.cooldownResetSuccesses ?? 1);
+				cooldowns.recordSuccess(target, resetSuccessesOf(options));
 			}
 			if (committed && isFailureEvent(event)) {
 				cooldowns.resetSuccesses(target);
@@ -374,7 +410,15 @@ function warnCooldown<Event extends StreamEventLike>(
 	nextTarget: string | undefined,
 	cooldowns: CooldownRegistry,
 ): void {
-	options.warn(target, reason, nextTarget, cooldowns.recordFailure(target));
+	options.warn(target, reason, nextTarget, cooldowns.recordFailure(target, cooldownOf(options)));
+}
+
+function cooldownOf<Event extends StreamEventLike>(options: FallbackOptions<Event>): CooldownPolicy {
+	return options.policy?.cooldown ?? BUILT_IN_COOLDOWN_POLICY;
+}
+
+function resetSuccessesOf<Event extends StreamEventLike>(options: FallbackOptions<Event>): number {
+	return cooldownOf(options).resetSuccesses;
 }
 
 async function attemptTarget<Event extends StreamEventLike>(
@@ -387,7 +431,7 @@ async function attemptTarget<Event extends StreamEventLike>(
 	let outcome: AttemptLatencyOutcome = "unsafe-throw";
 	const latency = createLatencySampler(options, target);
 	const buffered: Event[] = [];
-	const timeouts = hasNextTarget ? options.timeoutsFor?.(target) : undefined;
+	const timeouts = hasNextTarget ? options.policy?.timeouts : undefined;
 	const controller = timeouts ? new AbortController() : undefined;
 	const watchdog = timeouts ? createWatchdog(timeouts, options.timers ?? DEFAULT_TIMERS, () => controller!.abort()) : undefined;
 	try {
@@ -415,7 +459,7 @@ async function attemptTarget<Event extends StreamEventLike>(
 				watchdog?.disarm();
 				await flush(buffered, options.forward);
 				await options.forward(event);
-				if (isSuccessfulTerminal(event)) cooldowns.recordSuccess(target, options.cooldownResetSuccesses ?? 1);
+				if (isSuccessfulTerminal(event)) cooldowns.recordSuccess(target, resetSuccessesOf(options));
 				outcome = "complete";
 				return { kind: "complete" };
 			}
@@ -583,30 +627,79 @@ async function flush<Event>(events: Event[], forward: (event: Event) => void | P
 	events.length = 0;
 }
 
-interface AliasDefaults {
-	cooldownResetSuccesses: number;
-	timeouts?: AttemptTimeouts;
+function resolvePolicy(role: string, base: AliasPolicy, overrides: AliasPolicyInput): AliasPolicy {
+	const timeouts = mergeTimeouts(base.timeouts, overrides.timeouts);
+	const cooldown = { ...base.cooldown, ...overrides.cooldown };
+	if (cooldown.baseMs > cooldown.capMs) {
+		// A lone lower cap deliberately shortens its inherited base.
+		if (overrides.cooldown?.baseMs !== undefined) {
+			throw new Error(`invalid mapping for "${role}": cooldown baseMs exceeds capMs`);
+		}
+		cooldown.baseMs = cooldown.capMs;
+	}
+	return { ...(timeouts ? { timeouts } : {}), cooldown };
 }
 
-function parseDefaults(value: unknown): AliasDefaults {
-	if (value === undefined) return { cooldownResetSuccesses: 1 };
-	if (!isRecord(value) || Object.keys(value).some((key) => key !== "timeouts" && key !== "cooldownResetSuccesses")) {
+function parseDefaultsPolicy(value: unknown): AliasPolicyInput {
+	if (value === undefined) return {};
+	const validKeys = new Set(["timeouts", "cooldown", "cooldownResetSuccesses"]);
+	if (!isRecord(value) || Object.keys(value).some((key) => !validKeys.has(key))) {
 		throw new Error('invalid mapping for "$defaults"');
 	}
-	const cooldownResetSuccesses = value.cooldownResetSuccesses === undefined ? 1 : value.cooldownResetSuccesses;
-	if (typeof cooldownResetSuccesses !== "number" || !Number.isSafeInteger(cooldownResetSuccesses) || cooldownResetSuccesses < 1) {
-		throw new Error('invalid mapping for "$defaults"');
+	const policy = parsePolicyFields("$defaults", value);
+	if (value.cooldownResetSuccesses === undefined) return policy;
+	if (policy.cooldown?.resetSuccesses !== undefined) {
+		throw new Error('invalid mapping for "$defaults": set cooldown.resetSuccesses or cooldownResetSuccesses, not both');
 	}
-	return { cooldownResetSuccesses, timeouts: parseTimeouts("$defaults", value.timeouts) };
+	return {
+		...policy,
+		cooldown: { ...policy.cooldown, resetSuccesses: parseResetSuccesses("$defaults", value.cooldownResetSuccesses) },
+	};
 }
 
-function parseRoleConfig(role: string, value: unknown): { targets: readonly string[]; timeouts?: AttemptTimeouts } {
+function parseRoleConfig(role: string, value: unknown): { targets: readonly string[]; policy: AliasPolicyInput } {
 	if (!role) throw new Error('invalid mapping for ""');
-	if (!isRecord(value)) return { targets: normalizeTargets(role, value) };
-	if (Object.keys(value).some((key) => key !== "targets" && key !== "timeouts") || !("targets" in value)) {
+	if (!isRecord(value)) return { targets: normalizeTargets(role, value), policy: {} };
+	const validKeys = new Set(["targets", "timeouts", "cooldown"]);
+	if (Object.keys(value).some((key) => !validKeys.has(key)) || !("targets" in value)) {
 		throw new Error(`invalid mapping for "${role}"`);
 	}
-	return { targets: normalizeTargets(role, value.targets), timeouts: parseTimeouts(role, value.timeouts) };
+	return { targets: normalizeTargets(role, value.targets), policy: parsePolicyFields(role, value) };
+}
+
+function parsePolicyFields(role: string, value: Record<string, unknown>): AliasPolicyInput {
+	return {
+		timeouts: parseTimeouts(role, value.timeouts),
+		cooldown: parseCooldown(role, value.cooldown),
+	};
+}
+
+function parseCooldown(role: string, value: unknown): Partial<CooldownPolicy> | undefined {
+	if (value === undefined) return undefined;
+	const validKeys = new Set(["baseMs", "capMs", "resetSuccesses"]);
+	if (!isRecord(value) || Object.keys(value).some((key) => !validKeys.has(key))) {
+		throw new Error(`invalid mapping for "${role}"`);
+	}
+	const cooldown: Partial<CooldownPolicy> = {};
+	for (const key of ["baseMs", "capMs"] as const) {
+		const delayMs = value[key];
+		if (delayMs === undefined) continue;
+		if (typeof delayMs !== "number" || !Number.isFinite(delayMs) || delayMs <= 0) {
+			throw new Error(`invalid mapping for "${role}"`);
+		}
+		cooldown[key] = delayMs;
+	}
+	if (value.resetSuccesses !== undefined) {
+		cooldown.resetSuccesses = parseResetSuccesses(role, value.resetSuccesses);
+	}
+	return cooldown;
+}
+
+function parseResetSuccesses(role: string, value: unknown): number {
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+		throw new Error(`invalid mapping for "${role}"`);
+	}
+	return value;
 }
 
 function parseTimeouts(role: string, value: unknown): AttemptTimeouts | undefined {

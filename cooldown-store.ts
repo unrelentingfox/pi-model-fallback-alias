@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import type { DebugLog } from "./debug-log.ts";
 import {
 	nextCooldown,
+	type CooldownPolicy,
 	type CooldownRegistry,
 	type CooldownState,
 } from "./fallback.ts";
@@ -50,11 +51,11 @@ export function createSharedCooldownRegistry(options: SharedCooldownOptions = {}
 			const entry = store.entries()[target];
 			return entry !== undefined && entry.nextRetryAt > store.now();
 		},
-		recordFailure(target) {
+		recordFailure(target, cooldown?: CooldownPolicy) {
 			const now = store.now();
 			store.prepareWrite();
 			const entries = store.reload();
-			const update = nextCooldown(entries[target], now);
+			const update = nextCooldown(entries[target], now, cooldown);
 			entries[target] = { failCount: update.failCount, nextRetryAt: update.nextRetryAt };
 			store.write(entries, now);
 			store.log("cooldown-record", { targetRef: target, ...update });

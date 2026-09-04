@@ -1,6 +1,6 @@
 import { createProvider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MAP_PATH, loadAliasConfig } from "./alias-config.ts";
+import { MAP_PATH, createPolicyLoader, loadAliasConfig } from "./alias-config.ts";
 import { aliasModel, initializeAliasMetadata } from "./alias-model.ts";
 import { createAliasStreams } from "./alias-stream.ts";
 import { registerAliasApiProvider } from "./api-registration.ts";
@@ -15,8 +15,10 @@ import {
 	appendConfigWarningEntry,
 	appendFailoverEntry,
 	appendLatencyReportEntry,
+	appendPolicyWarningEntry,
 	appendResetEntry,
 	formatConfigWarning,
+	formatPolicyWarning,
 	registerTranscriptRenderers,
 	reportFailover,
 } from "./transcript.ts";
@@ -34,7 +36,7 @@ export type AliasSession = StatusSession<Registry, ExtensionContext["ui"]>;
 
 export default function piModelAlias(pi: ExtensionAPI): void {
 	const aliasConfig = loadAliasConfig(DEBUG_LOG);
-	const { aliases, timeoutsFor } = aliasConfig;
+	const { aliases } = aliasConfig;
 	let pendingConfigWarnings = [...aliasConfig.warnings];
 	DEBUG_LOG.log("extension-load", { mapPath: MAP_PATH, aliases: [...aliases.keys()] });
 	if (aliases.size === 0) return;
@@ -64,10 +66,17 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	statusRefreshInterval.unref?.();
 
 	const aliasModels = [...aliases.keys()].map((id) => aliasModel(id, PROVIDER_ID));
+	const policyFor = createPolicyLoader({
+		debugLog: DEBUG_LOG,
+		initial: aliasConfig,
+		onWarning(warning) {
+			appendPolicyWarningEntry(pi, warning, DEBUG_LOG);
+			if (!session.hasUI) console.warn(`[pi-model-alias] ${formatPolicyWarning(warning)}`);
+		},
+	});
 	const streams = createAliasStreams({
 		aliases,
-		timeoutsFor,
-		cooldownResetSuccesses: aliasConfig.cooldownResetSuccesses,
+		policyFor,
 		aliasModels,
 		session,
 		cooldowns: TARGET_COOLDOWNS,

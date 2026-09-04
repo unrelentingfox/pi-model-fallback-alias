@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSharedCooldownRegistry } from "../cooldown-store.ts";
+import { COOLDOWN_BASE_MS } from "../fallback.ts";
 
 const STATE_PATH = "/fake/logs/cooldown-state.json";
 
@@ -64,10 +65,18 @@ test("escalates failures persisted by another registry instance", () => {
 	const firstUpdate = first.recordFailure("provider/model");
 	const secondUpdate = second.recordFailure("provider/model");
 
-	assert.deepEqual(firstUpdate, { failCount: 1, nextRetryAt: 31_000, durationMs: 30_000 });
-	assert.deepEqual(secondUpdate, { failCount: 2, nextRetryAt: 61_000, durationMs: 60_000 });
+	assert.deepEqual(firstUpdate, {
+		failCount: 1,
+		nextRetryAt: 1_000 + COOLDOWN_BASE_MS,
+		durationMs: COOLDOWN_BASE_MS,
+	});
+	assert.deepEqual(secondUpdate, {
+		failCount: 2,
+		nextRetryAt: 1_000 + COOLDOWN_BASE_MS * 2,
+		durationMs: COOLDOWN_BASE_MS * 2,
+	});
 	assert.deepEqual(fs.state(), {
-		"provider/model": { failCount: 2, nextRetryAt: 61_000 },
+		"provider/model": { failCount: 2, nextRetryAt: 1_000 + COOLDOWN_BASE_MS * 2 },
 	});
 });
 
@@ -121,7 +130,7 @@ test("an absent recordSuccess does not erase a failure committed after its cache
 
 	assert.equal(fs.calls.filter((call) => call.startsWith("write:")).length, writesBeforeReset);
 	assert.deepEqual(fs.state(), {
-		"failed/model": { failCount: 1, nextRetryAt: 31_000 },
+		"failed/model": { failCount: 1, nextRetryAt: 1_000 + COOLDOWN_BASE_MS },
 	});
 });
 
@@ -136,7 +145,7 @@ test("a present recordSuccess at threshold one reloads and preserves a concurren
 	second.recordSuccess("reset/model", 1);
 
 	assert.deepEqual(fs.state(), {
-		"failed/model": { failCount: 1, nextRetryAt: 31_000 },
+		"failed/model": { failCount: 1, nextRetryAt: 1_000 + COOLDOWN_BASE_MS },
 	});
 });
 
@@ -169,9 +178,11 @@ test("resetSuccesses clears an in-progress success streak without clearing the c
 
 	registry.resetSuccesses("flaky/model");
 
-	assert.deepEqual(registry.state("flaky/model"), { failCount: 1, nextRetryAt: 31_000 });
+	assert.deepEqual(registry.state("flaky/model"), {
+		failCount: 1,
+		nextRetryAt: 1_000 + COOLDOWN_BASE_MS,
+	});
 });
-
 
 test("prunes entries whose retry time is over one hour old", () => {
 	const now = 10_000_000;
@@ -188,7 +199,7 @@ test("prunes entries whose retry time is over one hour old", () => {
 
 	assert.deepEqual(fs.state(), {
 		"recent/model": { failCount: 1, nextRetryAt: now - 1_000 },
-		"new/model": { failCount: 1, nextRetryAt: now + 30_000 },
+		"new/model": { failCount: 1, nextRetryAt: now + COOLDOWN_BASE_MS },
 	});
 });
 

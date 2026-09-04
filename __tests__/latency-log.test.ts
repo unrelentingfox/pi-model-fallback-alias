@@ -19,10 +19,60 @@ test("reads valid latency records, malformed lines, and .old rotations", () => {
 		["debug.jsonl.old", `${JSON.stringify({ event: "attempt-latency", ...completeSample, targetRef: "provider/old" })}\n`],
 	]);
 
-	const report = readLatencyLog(expandLogPaths(["debug.jsonl"]), (path) => logs.get(path));
+	const report = readLatencyLog(expandLogPaths(["debug.jsonl"], () => []), (path) => logs.get(path));
 
 	assert.equal(report.samples.length, 2);
-	assert.deepEqual(report.samples.map((sample) => sample.targetRef), ["provider/model", "provider/old"]);
+	assert.deepEqual(report.samples.map((sample) => sample.targetRef), ["provider/old", "provider/model"]);
+});
+
+test("reads retained generations oldest first and the active file last", () => {
+	const entries = [
+		"pi-model-alias-debug.jsonl",
+		"pi-model-alias-debug.jsonl.2026-03-20T00-00-00-000Z.99.1.jsonl",
+		"pi-model-alias-debug.jsonl.2026-03-18T00-00-00-000Z.98.1.jsonl",
+		"cooldown-state.json",
+	];
+
+	const paths = expandLogPaths(["/logs/pi-model-alias-debug.jsonl"], () => entries);
+
+	assert.deepEqual(paths, [
+		"/logs/pi-model-alias-debug.jsonl.old",
+		"/logs/pi-model-alias-debug.jsonl.2026-03-18T00-00-00-000Z.98.1.jsonl",
+		"/logs/pi-model-alias-debug.jsonl.2026-03-20T00-00-00-000Z.99.1.jsonl",
+		"/logs/pi-model-alias-debug.jsonl",
+	]);
+});
+
+test("excludes archives that belong to another requested log name", () => {
+	const entries = [
+		"pi-model-alias-debug.jsonl.2026-03-18T00-00-00-000Z.98.1.jsonl",
+		"other.jsonl.2026-03-19T00-00-00-000Z.98.1.jsonl",
+	];
+
+	const paths = expandLogPaths(["/logs/other.jsonl"], () => entries);
+
+	assert.deepEqual(paths, [
+		"/logs/other.jsonl.old",
+		"/logs/other.jsonl.2026-03-19T00-00-00-000Z.98.1.jsonl",
+		"/logs/other.jsonl",
+	]);
+});
+
+test("reads each retained generation once", () => {
+	const entries = ["pi-model-alias-debug.jsonl.2026-03-18T00-00-00-000Z.98.1.jsonl"];
+	const reads: string[] = [];
+	const paths = expandLogPaths(
+		["/logs/pi-model-alias-debug.jsonl", "/logs/pi-model-alias-debug.jsonl"],
+		() => entries,
+	);
+
+	readLatencyLog(paths, (path) => {
+		reads.push(path);
+		return undefined;
+	});
+
+	assert.equal(new Set(reads).size, reads.length);
+	assert.equal(reads.length, 3);
 });
 
 test("keeps legacy attempt-timeout records separate from latency samples", () => {

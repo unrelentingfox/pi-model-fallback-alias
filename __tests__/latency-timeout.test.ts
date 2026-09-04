@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCooldownRegistry, parseAliasConfig, runFallbackChain, type TimerApi } from "../fallback.ts";
+import { BUILT_IN_COOLDOWN_POLICY, createCooldownRegistry, parseAliasConfig, runFallbackChain, type AliasPolicy, type TimerApi } from "../fallback.ts";
+
+function policyWith(timeouts: object): AliasPolicy {
+	return { timeouts, cooldown: BUILT_IN_COOLDOWN_POLICY };
+}
 
 type Event = { type: "start" | "thinking_delta" | "text_start" | "done" | "error"; reason?: "error" | "aborted"; error?: { errorMessage?: string } };
 type Entry = { ms: number; callback: () => void; cleared: boolean; unrefed: boolean };
@@ -48,14 +52,14 @@ function turn(): Promise<void> {
 
 function chain(clock: ReturnType<typeof timers>, open: (target: string, signal?: AbortSignal) => Promise<AsyncIterable<Event>>, timeouts: object, extras = {}) {
 	return runFallbackChain({
-		role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => timeouts,
+		role: "coder", targets: ["a/model", "b/model"], timers: clock.api, policy: policyWith(timeouts),
 		open, forward: async () => undefined, warn: () => undefined, ...extras,
 	});
 }
 
 test("fails over on a first-event latency timeout", async () => {
 	const clock = timers(); const opened: string[] = []; const forwarded: string[] = []; const warnings: string[] = [];
-	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10 }), open: async (target) => { opened.push(target); return target === "a/model" ? never() : values({ type: "text_start" }, { type: "done" }); }, forward: async (event) => { forwarded.push(event.type); }, warn: (_a, reason) => warnings.push(reason) });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, policy: policyWith({ firstEventMs: 10 }), open: async (target) => { opened.push(target); return target === "a/model" ? never() : values({ type: "text_start" }, { type: "done" }); }, forward: async (event) => { forwarded.push(event.type); }, warn: (_a, reason) => warnings.push(reason) });
 	await turn(); clock.fire(10); await run;
 	assert.deepEqual(opened, ["a/model", "b/model"]); assert.deepEqual(forwarded, ["text_start", "done"]); assert.match(warnings[0]!, /latency timeout/);
 });
@@ -63,7 +67,7 @@ test("fails over on a first-event latency timeout", async () => {
 test("resets the stall timer for thinking events and discards their buffer", async () => {
 	const clock = timers(); let release!: () => void; const wait = new Promise<void>((resolve) => (release = resolve)); const sent: string[] = [];
 	async function* thinking(): AsyncGenerator<Event> { yield { type: "thinking_delta" }; yield { type: "thinking_delta" }; await wait; }
-	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ stallMs: 20 }), open: async (target) => target === "a/model" ? thinking() : values({ type: "text_start" }, { type: "done" }), forward: async (event) => { sent.push(event.type); }, warn: () => undefined });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, policy: policyWith({ stallMs: 20 }), open: async (target) => target === "a/model" ? thinking() : values({ type: "text_start" }, { type: "done" }), forward: async (event) => { sent.push(event.type); }, warn: () => undefined });
 	await turn(); clock.fire(20); release(); await run;
 	assert.deepEqual(sent, ["text_start", "done"]); assert.ok(clock.entries.filter((entry) => entry.ms === 20).length >= 3);
 });
@@ -83,7 +87,7 @@ test("does not arm timers for the final target", async () => {
 
 test("does not arm timers for a single target", async () => {
 	const clock = timers(); let reject!: (error: Error) => void; const pending = new Promise<AsyncIterable<Event>>((_resolve, fail) => (reject = fail));
-	const run = runFallbackChain({ role: "coder", targets: ["a/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10 }), open: async () => pending, forward: async () => undefined, warn: () => undefined });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model"], timers: clock.api, policy: policyWith({ firstEventMs: 10 }), open: async () => pending, forward: async () => undefined, warn: () => undefined });
 	await turn(); assert.equal(clock.entries.length, 0); reject(new Error("stop")); await assert.rejects(run, /stop/);
 });
 
@@ -105,7 +109,7 @@ test("preserves a real user abort with configured timeouts", async () => {
 test("disarms all watchdog timers at commit", async () => {
 	const clock = timers(); let release!: () => void; const wait = new Promise<void>((resolve) => (release = resolve)); const forwarded: string[] = [];
 	async function* commits(): AsyncGenerator<Event> { yield { type: "text_start" }; await wait; yield { type: "done" }; }
-	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10, stallMs: 20, commitMs: 30 }), open: async (target) => target === "a/model" ? commits() : values({ type: "done" }), forward: async (event) => { forwarded.push(event.type); }, warn: () => undefined });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, policy: policyWith({ firstEventMs: 10, stallMs: 20, commitMs: 30 }), open: async (target) => target === "a/model" ? commits() : values({ type: "done" }), forward: async (event) => { forwarded.push(event.type); }, warn: () => undefined });
 	await turn(); assert.ok(clock.entries.every((entry) => entry.unrefed)); release(); await run; assert.deepEqual(forwarded, ["text_start", "done"]);
 });
 
@@ -128,7 +132,7 @@ test("does not rearm the watchdog after commit", async () => {
 		role: "coder",
 		targets: ["a/model", "b/model"],
 		timers: clock.api,
-		timeoutsFor: () => ({ stallMs: 20 }),
+		policy: policyWith({ stallMs: 20 }),
 		open: async (target, signal) => {
 			signal?.addEventListener("abort", () => { aborts++; });
 			return target === "a/model" ? commitsThenPauses() : values({ type: "done" });
@@ -150,14 +154,14 @@ test("ignores a timer that fires as the stream commits", async () => {
 	const clock = timers(); let release!: () => void; const wait = new Promise<void>((resolve) => (release = resolve));
 	const opened: string[] = []; const forwarded: string[] = []; const warned: string[] = [];
 	async function* commits(): AsyncGenerator<Event> { yield { type: "text_start" }; await wait; yield { type: "done" }; }
-	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10, stallMs: 20 }), open: async (target) => { opened.push(target); return target === "a/model" ? commits() : values({ type: "done" }); }, forward: async (event) => { forwarded.push(event.type); }, warn: (target) => warned.push(target) });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, policy: policyWith({ firstEventMs: 10, stallMs: 20 }), open: async (target) => { opened.push(target); return target === "a/model" ? commits() : values({ type: "done" }); }, forward: async (event) => { forwarded.push(event.type); }, warn: (target) => warned.push(target) });
 	await turn(); clock.entries.forEach((entry) => { entry.cleared = false; }); clock.fire(20); release(); await run;
 	assert.deepEqual(opened, ["a/model"]); assert.deepEqual(forwarded, ["text_start", "done"]); assert.deepEqual(warned, []);
 });
 
 test("parses defaults, role settings, and legacy maps", () => {
 	const config = parseAliasConfig({ $defaults: { timeouts: { firstEventMs: 10, stallMs: 20 } }, old: "a/model", next: { targets: ["alias/old", "b/model"], timeouts: { commitMs: 30 } } });
-	assert.deepEqual(config.aliases.get("next"), ["a/model", "b/model"]); assert.deepEqual(config.timeoutsFor("next"), { firstEventMs: 10, stallMs: 20, commitMs: 30 }); assert.equal(parseAliasConfig({ old: "a/model" }).timeoutsFor("old"), undefined); assert.throws(() => parseAliasConfig({ bad: { targets: "a/model", timeouts: { stallMs: 0 } } }));
+	assert.deepEqual(config.aliases.get("next"), ["a/model", "b/model"]); assert.deepEqual(config.policyFor("next").timeouts, { firstEventMs: 10, stallMs: 20, commitMs: 30 }); assert.equal(parseAliasConfig({ old: "a/model" }).policyFor("old").timeouts, undefined); assert.throws(() => parseAliasConfig({ bad: { targets: "a/model", timeouts: { stallMs: 0 } } }));
 });
 
 test("passes an independently aborted attempt signal to the provider opener", async () => {
