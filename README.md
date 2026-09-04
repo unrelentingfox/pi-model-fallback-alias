@@ -29,10 +29,14 @@ JSON file without touching anything else.
   real output is forwarded, so a failed thinking-only attempt is discarded
   and retried; once text or tool output flows, failover stops (Pi's stream
   consumer cannot reset after that point)
-- **Failure cooldowns**: failed targets back off starting at 30 seconds,
-  doubling to a 30-minute cap; a successful stream commit resets the count.
-  Cooled targets are skipped while alternatives remain, retried before
-  exhaustion, and attempted immediately if the whole chain is cooling
+- **Failure cooldowns**: failed targets back off from a configurable base,
+  doubling to a configurable cap (5 minutes to 60 minutes by default). Set
+  `cooldown.resetSuccesses` to require more consecutive successes before a
+  target's cooldown clears. Any failure — before or after
+  the stream commits — resets that success streak back to zero, so only an
+  uninterrupted run of successes clears the cooldown. Cooled targets are
+  skipped while alternatives remain, retried before exhaustion, and attempted
+  immediately if the whole chain is cooling
 - **Cross-process cooldown store**: cooldown state is shared through
   `logs/cooldown-state.json` (atomic writes, mtime-based reload), so main
   sessions and subagent processes see each other's failures
@@ -164,27 +168,59 @@ keeps `responseModel` model-only and does not change that package.
   Wait for the next 30-second refresh, inspect the transcript warning, or clear
   cooldown state with `/reset-model-cooldown`.
 - **Debug log** — `logs/pi-model-alias-debug.jsonl` inside this directory
-  records loads, open attempts, failovers, cooldown changes, and UI errors
-  (1 MiB rotation, previous file kept as `.old`).
+  records loads, open attempts, failovers, cooldown changes, and UI errors.
+  See [Debug log retention](#debug-log-retention) for rotation settings.
 - **Cooldown state** — `logs/cooldown-state.json`; entries expire on their
   own and stale entries are pruned after an hour.
 - **A restored session cannot find its alias** — add the removed role back to
   `model-alias.json`, select a current model, or start a new session. Persisted
   assistant messages intentionally retain the logical alias for session restore.
 
+## Debug log retention
+
+The active log rotates once it passes a size limit. Each rotation becomes a
+timestamped archive such as
+`pi-model-alias-debug.jsonl.2026-09-03T19-17-49-360Z.31522.1.jsonl`; the process
+id and sequence keep concurrent sessions from claiming the same name. Archives
+older than the retention window are deleted at startup and at each rotation
+check. Readers and the latency report consume the active log, every retained
+archive, and any legacy `.old` file; legacy `.old` files are not auto-deleted.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PI_MODEL_ALIAS_LOG_MAX_BYTES` | `1048576` | Size at which the active log rotates |
+| `PI_MODEL_ALIAS_LOG_RETENTION_DAYS` | `7` | Age after which archives are deleted |
+
+Both accept positive integers. An invalid value warns once and uses the
+default.
+
+### Correlating a provider failure with AWS
+
+`attempt-latency` and `failover-warn` records carry the failing response's
+`httpStatus`, plus `requestId`, `traceId`, and `diagnosticHeaders` when the
+provider returns them. Only request and trace identifiers are recorded:
+authorization headers, cookies, request payloads, and response bodies are never
+logged. The same allowlisted fields also persist in failover session entries,
+which follow session retention rather than debug-log retention.
+
+To escalate a provider-side failure, take `requestId` (or `traceId`) with the
+record's `ts`, the `targetRef` model, and that provider's region, then search
+CloudWatch for the request id or give AWS Support the same tuple. For
+`provider-example/model-family-*` targets the region is the endpoint's region,
+`us-east-1`.
+
 ## Development
 
 Requires Node 22.18 or later because Node type stripping runs both the tests and the `.mjs` report CLI.
 
 ```bash
-node --import ./scripts/pi-resolve.mjs --test __tests__/*.test.ts
-bash scripts/typecheck.sh
+npm test
+npm run typecheck
 ```
 
-`pi-resolve.mjs` and `typecheck.sh` find the installed Pi runtime. Set
-`PI_ROOT` to override the package location. The type-check script uses Pi's
-Node type definitions and writes a temporary local override, so
-`tsconfig.json` stays portable.
+The package uses pinned development dependencies for repeatable local tests
+and type checks. `pi-resolve.mjs` keeps the standalone test command available
+when needed.
 
 Module layout: `index.ts` (composition root), `alias-config.ts` (map
 loading), `alias-model.ts` (model factory + metadata), `alias-stream.ts`
@@ -224,7 +260,85 @@ Timeouts are active only if a fallback target remains. A one-target alias and
 the final target in a chain are never aborted for latency. Timers stop when
 text or tool output commits, so this extension never swaps providers after
 partial output reaches Pi. A latency timeout records the normal shared
-cooldown (30 seconds to 30 minutes), and the next request can skip that target.
+cooldown (`baseMs` to `capMs`, 5 minutes to 60 minutes by default), and the
+next request can skip that target.
+
+## Cooldown policy
+
+`$defaults` and any object-form alias accept the same policy fields, so each
+alias is the defaults plus its own overrides:
+
+```json
+{
+  "$defaults": {
+    "timeouts": { "firstEventMs": 30000, "stallMs": 60000 },
+    "cooldown": { "baseMs": 300000, "capMs": 3600000, "resetSuccesses": 3 }
+  },
+  "coder": [
+    "provider-example/model-fallback",
+    "amazon-bedrock/model-fallback"
+  ],
+  "impatient": {
+    "targets": ["alias/coder"],
+    "timeouts": { "firstEventMs": 15000 },
+    "cooldown": { "baseMs": 60000, "resetSuccesses": 1 }
+  }
+}
+```
+
+Resolution runs built-in defaults, then `$defaults`, then the requested
+alias's overrides, merging `timeouts` and `cooldown` field by field. `coder`
+above inherits the full default policy; `impatient` keeps the default 60
+minute cap while overriding the first-event limit, base, and reset count.
+String and array aliases stay valid and inherit the defaults.
+
+Cooldowns grow from `baseMs`, doubling until they reach `capMs`. `baseMs` and
+`capMs` are positive milliseconds and `resetSuccesses` is a positive integer.
+Setting only a `capMs` below an inherited `baseMs` clamps that base down to the
+cap, so lowering one cap cannot disable the extension; writing a `baseMs`
+above a `capMs` in the same entry is rejected as a contradiction. The legacy
+`$defaults.cooldownResetSuccesses` still works, but setting it alongside
+`cooldown.resetSuccesses` is rejected rather than silently resolved.
+
+The policy is the requested alias's own. Nested `alias/<role>` refs contribute
+targets only, so one request runs under one policy no matter which alias
+supplied a target.
+
+### Shared state across aliases
+
+Cooldown state stays keyed by concrete target and shared across aliases and
+processes, so policy choices interact:
+
+- A failure applies the requesting alias's growth curve, but never shortens a
+  cooldown another alias already set. The longer window wins.
+- A success applies the requesting alias's `resetSuccesses`, so an alias with
+  `resetSuccesses: 1` can clear state that a stricter alias created.
+- Any failure, before or after commit, resets the success streak to zero.
+
+## Reloading policy
+
+Because cooldown state is shared, every new stream re-reads the alias file and
+resolves the current policy instead of trusting a startup snapshot. Policy
+edits therefore apply to the next request in every running session.
+
+Alias names and target chains are registered at startup and still need a
+reload; only policy is live. In-flight streams keep the policy captured when
+they started.
+
+If the current file cannot be used — unreadable, malformed, caught
+half-written, invalid, or missing that alias — the stream continues on the
+last valid policy, adds one durable transcript warning per alias per distinct
+failure in TUI mode (and writes the same warning to stderr in headless mode),
+and records `alias-policy-stale`. Recovery of that alias logs `alias-policy-recovered`;
+one healthy alias never clears another's degraded state. Availability is
+preserved, at the cost that processes can sit on different cached generations
+until the file parses again, so replace it atomically (write a temporary file,
+then rename) to keep every session consistent.
+
+Each `attempt-latency` record carries `configLoadMs`, the cost of that read,
+parse, and resolve, plus `configDegraded` to show whether the attempt ran on
+the current file or a cached policy. They report only a duration and a flag,
+never config contents.
 
 ## Measuring latency
 
@@ -242,7 +356,8 @@ node scripts/latency-report.mjs
 In Pi, run `/alias-latency-report` for the same transcript report, or pass an alias role to filter it: `/alias-latency-report coder`.
 
 Pass extra debug JSONL paths as arguments when needed. The report also reads
-`.old` rotations and skips malformed lines. The table shows timeout count, rate,
+retained archives and any legacy `.old` rotation, oldest first, and skips
+malformed lines. The table shows timeout count, rate,
 and kind; the role summary warns when timers fire too often or do not fire in
 200 attempts. Suggestions remain role-level heuristics from your own traffic;
 low-confidence targets need more samples.

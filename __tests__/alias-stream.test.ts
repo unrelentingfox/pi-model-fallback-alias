@@ -6,9 +6,11 @@ import type {
 	AssistantMessageEvent,
 	AssistantMessageEventStream,
 	Model,
+	ProviderResponse,
+	StreamOptions,
 } from "@earendil-works/pi-ai";
 import { createAliasStreams } from "../alias-stream.ts";
-import { createCooldownRegistry } from "../fallback.ts";
+import { BUILT_IN_COOLDOWN_POLICY, createCooldownRegistry, type AliasPolicy } from "../fallback.ts";
 
 test("rewrites partial and done identities without mutating target messages", async () => {
 	const partial = targetMessage({ responseModel: "reported-model" });
@@ -92,19 +94,152 @@ test("rewrites fallback success while retaining the fallback target", async () =
 	assert.equal(activeTargets.get("coder"), "target/fallback-model");
 });
 
+test("records response status without headers or failover", async () => {
+	const records: Array<{ event: string; data?: Record<string, unknown> }> = [];
+	const response = { status: 500, headers: undefined } as unknown as ProviderResponse;
+	const { stream } = aliasStream(
+		{ "target-model": asyncEvents(doneEvent(targetMessage())) },
+		{ providerResponse: response, log: (event, data) => records.push({ event, data }) },
+	);
+
+	const events = await collect(stream);
+	await new Promise(setImmediate);
+
+	assert.equal(events.length, 1);
+	assert.equal(events[0]?.type, "done");
+	assert.equal(records.filter(({ event }) => event === "failover-warn").length, 0);
+	assert.equal(records.find(({ event }) => event === "attempt-latency")?.data?.httpStatus, 500, JSON.stringify(records));
+});
+
+test("logs allowlisted provider response metadata and preserves the caller callback", async () => {
+	const records: Array<{ event: string; data?: Record<string, unknown> }> = [];
+	const responses = {
+		"target-model": asyncEvents({ type: "error", reason: "error", error: targetMessage({ stopReason: "error" }) }),
+		"fallback-model": asyncEvents(doneEvent(targetMessage({ model: "fallback-model" }))),
+	};
+	const providerResponse: ProviderResponse = {
+		status: 500,
+		headers: {
+			"X-Amzn-RequestId": "request-1",
+			"X-Amzn-Trace-Id": "trace-1",
+			Authorization: "Bearer secret",
+			Cookie: "session=secret",
+			"Set-Cookie": "token=secret",
+		},
+	};
+	let callerResponse: ProviderResponse | undefined;
+	const { stream } = aliasStream(responses, {
+		providerResponse,
+		streamOptions: { onResponse: (response) => { callerResponse = response; } },
+		log: (event, data) => records.push({ event, data }),
+	});
+
+	await collect(stream);
+
+	assert.equal(callerResponse, providerResponse);
+	const latency = records.find(({ event, data }) =>
+		event === "attempt-latency" && data?.targetRef === "target/target-model")?.data;
+	assert.equal(latency?.httpStatus, 500);
+	assert.equal(latency?.requestId, "request-1");
+	assert.equal(latency?.traceId, "trace-1");
+	assert.deepEqual(latency?.diagnosticHeaders, {
+		"x-amzn-requestid": "request-1",
+		"x-amzn-trace-id": "trace-1",
+	});
+	assert.doesNotMatch(JSON.stringify(records), /secret|authorization|cookie/iu);
+});
+
+test("reports the config load cost on every attempt record without an extra event", async () => {
+	const records: Array<{ event: string; data?: Record<string, unknown> }> = [];
+	const { stream } = aliasStream(
+		{
+			"target-model": asyncEvents({ type: "error", reason: "error", error: targetMessage({ stopReason: "error" }) }),
+			"fallback-model": asyncEvents(doneEvent(targetMessage({ model: "fallback-model" }))),
+		},
+		{ configLoadMs: 0.42, log: (event, data) => records.push({ event, data }) },
+	);
+
+	await collect(stream);
+
+	const latency = records.filter(({ event }) => event === "attempt-latency");
+	assert.equal(latency.length, 2);
+	// Each record is self-contained, so a reader never has to join events.
+	assert.deepEqual(latency.map(({ data }) => data?.configLoadMs), [0.42, 0.42]);
+	// A reader can tell whether an attempt ran on current or cached policy.
+	assert.deepEqual(latency.map(({ data }) => data?.configDegraded), [false, false]);
+	assert.deepEqual(records.filter(({ event }) => event.startsWith("alias-policy")), []);
+	// Only the duration and a degraded flag are reported; alias names and policy
+	// values stay out of the log.
+	assert.doesNotMatch(JSON.stringify(records), /resetSuccesses|baseMs|capMs|\$defaults/u);
+});
+
+test("marks attempts that ran on a cached policy", async () => {
+	const records: Array<{ event: string; data?: Record<string, unknown> }> = [];
+	const { stream } = aliasStream(
+		{ "target-model": asyncEvents(doneEvent(targetMessage())) },
+		{
+			log: (event, data) => records.push({ event, data }),
+			policyLoad: () => ({ policy: { cooldown: BUILT_IN_COOLDOWN_POLICY }, configLoadMs: 0.2, degraded: true }),
+		},
+	);
+
+	await collect(stream);
+	await new Promise(setImmediate);
+
+	assert.equal(
+		records.find(({ event }) => event === "attempt-latency")?.data?.configDegraded,
+		true,
+		JSON.stringify(records),
+	);
+});
+
+test("keeps the policy captured when the stream started", async () => {
+	const records: Array<{ event: string; data?: Record<string, unknown> }> = [];
+	let loads = 0;
+	const { stream } = aliasStream(
+		{ "target-model": asyncEvents(doneEvent(targetMessage())) },
+		{
+			log: (event, data) => records.push({ event, data }),
+			policyLoad: () => ({
+				policy: { cooldown: BUILT_IN_COOLDOWN_POLICY },
+				configLoadMs: ++loads,
+				degraded: false,
+			}),
+		},
+	);
+
+	await collect(stream);
+	await new Promise(setImmediate);
+
+	assert.equal(loads, 1, "one stream resolves policy once");
+	assert.equal(records.find(({ event }) => event === "attempt-latency")?.data?.configLoadMs, 1);
+});
+
 function streamFor(events: readonly AssistantMessageEvent[] | AsyncIterable<AssistantMessageEvent>): AssistantMessageEventStream {
 	const { stream } = aliasStream({ "target-model": events });
 	return stream;
 }
 
-function aliasStream(responses: Record<string, readonly AssistantMessageEvent[] | AsyncIterable<AssistantMessageEvent>>): {
+interface AliasStreamTestOptions {
+	providerResponse?: ProviderResponse;
+	streamOptions?: StreamOptions;
+	log?(event: string, data?: Record<string, unknown>): void;
+	policy?: AliasPolicy;
+	configLoadMs?: number;
+	policyLoad?(): { policy: AliasPolicy; configLoadMs: number; degraded: boolean };
+}
+
+function aliasStream(
+	responses: Record<string, readonly AssistantMessageEvent[] | AsyncIterable<AssistantMessageEvent>>,
+	options: AliasStreamTestOptions = {},
+): {
 	stream: AssistantMessageEventStream;
 	activeTargets: Map<string, string>;
 } {
 	const activeTargets = new Map<string, string>();
 	const streams = createAliasStreams({
 		aliases: new Map([["coder", Object.keys(responses).map((model) => `target/${model}`)]]),
-		timeoutsFor: () => undefined,
+		policyFor: options.policyLoad ?? (() => ({ policy: options.policy ?? { cooldown: BUILT_IN_COOLDOWN_POLICY }, configLoadMs: options.configLoadMs ?? 0, degraded: false })),
 		aliasModels: [aliasModel()],
 		session: {
 			registry: {
@@ -113,11 +248,11 @@ function aliasStream(responses: Record<string, readonly AssistantMessageEvent[] 
 				},
 				getProvider() {
 					return {
-						stream(model: Model<Api>) {
-							return responses[model.id]! as AssistantMessageEventStream;
+						stream(model: Model<Api>, _context: unknown, streamOptions?: StreamOptions) {
+							return providerEvents(responses[model.id]!, streamOptions, options.providerResponse);
 						},
-						streamSimple(model: Model<Api>) {
-							return responses[model.id]! as AssistantMessageEventStream;
+						streamSimple(model: Model<Api>, _context: unknown, streamOptions?: StreamOptions) {
+							return providerEvents(responses[model.id]!, streamOptions, options.providerResponse);
 						},
 					};
 				},
@@ -131,10 +266,23 @@ function aliasStream(responses: Record<string, readonly AssistantMessageEvent[] 
 			activeTargets,
 		},
 		cooldowns: createCooldownRegistry(),
-		debugLog: { log: () => undefined },
+		debugLog: { log: options.log ?? (() => undefined) },
 		onFailover: () => undefined,
 	} as unknown as Parameters<typeof createAliasStreams>[0]);
-	return { stream: streams.stream(aliasModel(), { messages: [] }, undefined), activeTargets };
+	return { stream: streams.stream(aliasModel(), { messages: [] }, options.streamOptions), activeTargets };
+}
+
+async function* providerEvents(
+	events: readonly AssistantMessageEvent[] | AsyncIterable<AssistantMessageEvent>,
+	options: StreamOptions | undefined,
+	response: ProviderResponse | undefined,
+): AsyncGenerator<AssistantMessageEvent> {
+	if (response) await options?.onResponse?.(response, targetModel("target-model"));
+	if (Symbol.asyncIterator in Object(events)) {
+		for await (const event of events as AsyncIterable<AssistantMessageEvent>) yield event;
+		return;
+	}
+	yield* events as readonly AssistantMessageEvent[];
 }
 
 async function collect(stream: AssistantMessageEventStream): Promise<AssistantMessageEvent[]> {

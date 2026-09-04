@@ -8,6 +8,13 @@ export type LatencyOutcome =
 	| "unsafe-throw"
 	| "timeout";
 
+export interface ProviderResponseMetadata {
+	httpStatus: number;
+	requestId?: string;
+	traceId?: string;
+	diagnosticHeaders?: Record<string, string>;
+}
+
 export type LatencySample = {
 	role: string;
 	targetRef: string;
@@ -22,7 +29,7 @@ export type LatencySample = {
 	inputTokens?: number;
 	cacheReadTokens?: number;
 	outputTokens?: number;
-};
+} & Partial<ProviderResponseMetadata>;
 
 export interface MetricSummary {
 	p50?: number;

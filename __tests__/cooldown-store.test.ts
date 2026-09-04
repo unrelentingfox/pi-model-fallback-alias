@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSharedCooldownRegistry } from "../cooldown-store.ts";
+import { COOLDOWN_BASE_MS } from "../fallback.ts";
 
 const STATE_PATH = "/fake/logs/cooldown-state.json";
 
@@ -64,10 +65,18 @@ test("escalates failures persisted by another registry instance", () => {
 	const firstUpdate = first.recordFailure("provider/model");
 	const secondUpdate = second.recordFailure("provider/model");
 
-	assert.deepEqual(firstUpdate, { failCount: 1, nextRetryAt: 31_000, durationMs: 30_000 });
-	assert.deepEqual(secondUpdate, { failCount: 2, nextRetryAt: 61_000, durationMs: 60_000 });
+	assert.deepEqual(firstUpdate, {
+		failCount: 1,
+		nextRetryAt: 1_000 + COOLDOWN_BASE_MS,
+		durationMs: COOLDOWN_BASE_MS,
+	});
+	assert.deepEqual(secondUpdate, {
+		failCount: 2,
+		nextRetryAt: 1_000 + COOLDOWN_BASE_MS * 2,
+		durationMs: COOLDOWN_BASE_MS * 2,
+	});
 	assert.deepEqual(fs.state(), {
-		"provider/model": { failCount: 2, nextRetryAt: 61_000 },
+		"provider/model": { failCount: 2, nextRetryAt: 1_000 + COOLDOWN_BASE_MS * 2 },
 	});
 });
 
@@ -91,7 +100,7 @@ test("treats a corrupt state file as empty", () => {
 	assert.equal(registry.state("provider/model"), undefined);
 });
 
-test("resetting an absent target does not write or log a reset", () => {
+test("resetting an absent target via recordSuccess does not write or log a reset", () => {
 	const fs = new FakeCooldownFs();
 	const events: string[] = [];
 	const registry = createSharedCooldownRegistry({
@@ -100,7 +109,7 @@ test("resetting an absent target does not write or log a reset", () => {
 		debugLog: { log: (event) => events.push(event) },
 	});
 
-	registry.reset("absent/model");
+	registry.recordSuccess("absent/model", 1);
 
 	assert.deepEqual(
 		fs.calls.filter((call) => call.startsWith("write:") || call.startsWith("rename:")),
@@ -109,7 +118,7 @@ test("resetting an absent target does not write or log a reset", () => {
 	assert.equal(events.includes("cooldown-reset"), false);
 });
 
-test("an absent reset does not erase a failure committed after its cached snapshot", () => {
+test("an absent recordSuccess does not erase a failure committed after its cached snapshot", () => {
 	const fs = new FakeCooldownFs();
 	const first = createSharedCooldownRegistry({ dir: "/fake/logs", now: () => 1_000, fs });
 	const second = createSharedCooldownRegistry({ dir: "/fake/logs", now: () => 1_000, fs });
@@ -117,15 +126,15 @@ test("an absent reset does not erase a failure committed after its cached snapsh
 	first.recordFailure("failed/model");
 	const writesBeforeReset = fs.calls.filter((call) => call.startsWith("write:")).length;
 
-	second.reset("other/model");
+	second.recordSuccess("other/model", 1);
 
 	assert.equal(fs.calls.filter((call) => call.startsWith("write:")).length, writesBeforeReset);
 	assert.deepEqual(fs.state(), {
-		"failed/model": { failCount: 1, nextRetryAt: 31_000 },
+		"failed/model": { failCount: 1, nextRetryAt: 1_000 + COOLDOWN_BASE_MS },
 	});
 });
 
-test("a present reset reloads and preserves a concurrently committed failure", () => {
+test("a present recordSuccess at threshold one reloads and preserves a concurrently committed failure", () => {
 	const fs = new FakeCooldownFs();
 	fs.seed(JSON.stringify({ "reset/model": { failCount: 1, nextRetryAt: 20_000 } }));
 	const first = createSharedCooldownRegistry({ dir: "/fake/logs", now: () => 1_000, fs });
@@ -133,10 +142,45 @@ test("a present reset reloads and preserves a concurrently committed failure", (
 	assert.equal(second.state("reset/model")?.failCount, 1);
 	first.recordFailure("failed/model");
 
-	second.reset("reset/model");
+	second.recordSuccess("reset/model", 1);
 
 	assert.deepEqual(fs.state(), {
-		"failed/model": { failCount: 1, nextRetryAt: 31_000 },
+		"failed/model": { failCount: 1, nextRetryAt: 1_000 + COOLDOWN_BASE_MS },
+	});
+});
+
+test("recordSuccess below threshold keeps the cooldown active and stores the success count", () => {
+	const fs = new FakeCooldownFs();
+	fs.seed(JSON.stringify({ "slow-reset/model": { failCount: 2, nextRetryAt: 20_000 } }));
+	const registry = createSharedCooldownRegistry({ dir: "/fake/logs", now: () => 1_000, fs });
+
+	registry.recordSuccess("slow-reset/model", 3);
+
+	assert.deepEqual(registry.state("slow-reset/model"), {
+		failCount: 2,
+		nextRetryAt: 20_000,
+		successCount: 1,
+	});
+
+	registry.recordSuccess("slow-reset/model", 3);
+	assert.equal(registry.state("slow-reset/model")?.successCount, 2);
+
+	registry.recordSuccess("slow-reset/model", 3);
+	assert.equal(registry.state("slow-reset/model"), undefined);
+});
+
+test("resetSuccesses clears an in-progress success streak without clearing the cooldown", () => {
+	const fs = new FakeCooldownFs();
+	const registry = createSharedCooldownRegistry({ dir: "/fake/logs", now: () => 1_000, fs });
+	registry.recordFailure("flaky/model");
+	registry.recordSuccess("flaky/model", 5);
+	assert.equal(registry.state("flaky/model")?.successCount, 1);
+
+	registry.resetSuccesses("flaky/model");
+
+	assert.deepEqual(registry.state("flaky/model"), {
+		failCount: 1,
+		nextRetryAt: 1_000 + COOLDOWN_BASE_MS,
 	});
 });
 
@@ -155,7 +199,7 @@ test("prunes entries whose retry time is over one hour old", () => {
 
 	assert.deepEqual(fs.state(), {
 		"recent/model": { failCount: 1, nextRetryAt: now - 1_000 },
-		"new/model": { failCount: 1, nextRetryAt: now + 30_000 },
+		"new/model": { failCount: 1, nextRetryAt: now + COOLDOWN_BASE_MS },
 	});
 });
 

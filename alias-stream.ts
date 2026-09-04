@@ -7,11 +7,13 @@ import {
 	type Context,
 	type Model,
 	type Provider,
+	type ProviderResponse,
 	type ProviderStreams,
 	type SimpleStreamOptions,
 	type StreamOptions,
 } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { PolicyLoad } from "./alias-config.ts";
 import { mirrorTargetMetadata, targetsFor, ZERO_COST } from "./alias-model.ts";
 import type { DebugLog } from "./debug-log.ts";
 import {
@@ -19,11 +21,11 @@ import {
 	failureStopReason,
 	runFallbackChain,
 	type AliasMap,
-	type AttemptTimeouts,
 	type CooldownRegistry,
 	type FailoverEntryData,
 } from "./fallback.ts";
 import { requestOptions, type ResolvedTargetAuth } from "./request-options.ts";
+import type { ProviderResponseMetadata } from "./latency-stats.ts";
 import type { AliasSession } from "./session-status.ts";
 import { resolveAuthenticatedTarget } from "./target-auth.ts";
 
@@ -32,7 +34,8 @@ type StreamKind = keyof Pick<ProviderStreams, "stream" | "streamSimple">;
 
 interface AliasStreamDependencies {
 	aliases: AliasMap;
-	timeoutsFor(role: string): AttemptTimeouts | undefined;
+	/** Re-read per stream so every process follows the current shared rules. */
+	policyFor(role: string): PolicyLoad;
 	aliasModels: Model<Api>[];
 	session: AliasSession<Registry, ExtensionContext["ui"]>;
 	cooldowns: CooldownRegistry;
@@ -59,7 +62,7 @@ function createFallbackStream(
 	dependencies: AliasStreamDependencies,
 ): AssistantMessageEventStream {
 	const output = createAssistantMessageEventStream();
-	const { aliases, timeoutsFor, aliasModels, session, cooldowns, debugLog, onFailover } = dependencies;
+	const { aliases, policyFor, aliasModels, session, cooldowns, debugLog, onFailover } = dependencies;
 	const registry = session.registry;
 	if (!registry) {
 		const error = new Error(`Model alias "${aliasModel.id}" cannot stream before a session starts in this process`);
@@ -67,19 +70,30 @@ function createFallbackStream(
 		endWithError(output, aliasModel, error, undefined, options?.signal);
 		return output;
 	}
+	// Targets stay as registered at load; only policy follows the file.
 	const targets = targetsFor(aliasModel, aliases);
+	const { policy, configLoadMs, degraded } = policyFor(aliasModel.id);
+	const metadataByTarget = new Map<string, ProviderResponseMetadata>();
 	let lastPartial: AssistantMessage | undefined;
 
 	void runFallbackChain({
 		role: aliasModel.id,
 		targets,
 		cooldowns,
+		policy,
 		signal: options?.signal,
 		open: async (targetRef, attemptSignal) => {
 			try {
+				metadataByTarget.delete(targetRef);
 				const target = await resolveAuthenticatedTarget(aliasModel.id, targetRef, registry);
 				mirrorTargetMetadata(aliasModel, aliasModels, target.model);
-				const stream = openTargetStream(kind, target, context, options, linkedSignal(options?.signal, attemptSignal));
+				const stream = openTargetStream(
+					kind,
+					target,
+					context,
+					withResponseCapture(options, (response) => metadataByTarget.set(targetRef, response)),
+					linkedSignal(options?.signal, attemptSignal),
+				);
 				session.activeTargets.set(aliasModel.id, targetRef);
 				debugLog.log("open-attempt", { role: aliasModel.id, targetRef, ok: true });
 				return stream;
@@ -98,8 +112,15 @@ function createFallbackStream(
 			lastPartial = partialFrom(forwarded) ?? lastPartial;
 			output.push(forwarded);
 		},
-		timeoutsFor: () => timeoutsFor(aliasModel.id),
-		onLatency: (sample) => debugLog.log("attempt-latency", sample),
+		// configLoadMs and configDegraded ride the existing record; a separate event
+		// would add one more synchronous append per stream.
+		onLatency: (sample) =>
+			debugLog.log("attempt-latency", {
+				...sample,
+				configLoadMs,
+				configDegraded: degraded,
+				...metadataByTarget.get(sample.targetRef),
+			}),
 		onTimeout: (targetRef, reason) => debugLog.log("attempt-timeout", { role: aliasModel.id, targetRef, reason }),
 		warn: (failedTarget, reason, nextTarget, cooldown) =>
 			onFailover({
@@ -110,6 +131,7 @@ function createFallbackStream(
 				cooldownMs: cooldown.durationMs,
 				failCount: cooldown.failCount,
 				timestamp: Date.now(),
+				...metadataByTarget.get(failedTarget),
 			}),
 		// Pi treats a restart as a second assistant message, so safe prefixes stay hidden until commit.
 		snapshot: (event) => structuredClone(event),
@@ -130,6 +152,44 @@ function openTargetStream(
 	return kind === "streamSimple"
 		? target.provider.streamSimple(target.model, context, request as SimpleStreamOptions)
 		: target.provider.stream(target.model, context, request);
+}
+
+function withResponseCapture<T extends StreamOptions | SimpleStreamOptions>(
+	options: T | undefined,
+	capture: (metadata: ProviderResponseMetadata) => void,
+): T {
+	return {
+		...options,
+		onResponse: async (response: ProviderResponse, model: Model<Api>) => {
+			capture(responseMetadata(response));
+			await options?.onResponse?.(response, model);
+		},
+	} as T;
+}
+
+function responseMetadata(response: ProviderResponse): ProviderResponseMetadata {
+	const diagnosticHeaders = allowlistedHeaders(response.headers ?? {});
+	return {
+		httpStatus: response.status,
+		...(diagnosticHeaders["x-amzn-requestid"] ? { requestId: diagnosticHeaders["x-amzn-requestid"] } : {}),
+		...(diagnosticHeaders["x-amzn-trace-id"] ? { traceId: diagnosticHeaders["x-amzn-trace-id"] } : {}),
+		...(Object.keys(diagnosticHeaders).length > 0 ? { diagnosticHeaders } : {}),
+	};
+}
+
+const DIAGNOSTIC_HEADER_NAMES = new Set([
+	"x-amzn-requestid",
+	"x-amzn-trace-id",
+	"x-amz-request-id",
+	"x-request-id",
+]);
+
+function allowlistedHeaders(headers: Record<string, string>): Record<string, string> {
+	return Object.fromEntries(
+		Object.entries(headers)
+			.map(([name, value]) => [name.toLowerCase(), value] as const)
+			.filter(([name]) => DIAGNOSTIC_HEADER_NAMES.has(name)),
+	);
 }
 
 function linkedSignal(userSignal: AbortSignal | undefined, attemptSignal: AbortSignal | undefined): AbortSignal | undefined {

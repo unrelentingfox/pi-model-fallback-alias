@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runFallbackChain, type AttemptLatencySample, type TimerApi } from "../fallback.ts";
+import { BUILT_IN_COOLDOWN_POLICY, runFallbackChain, type AttemptLatencySample, type TimerApi } from "../fallback.ts";
 import { percentile, summarizeByRole, suggestThresholds, summarize, timeoutWarnings } from "../latency-stats.ts";
 
 type Event = { type: "start" | "thinking_delta" | "text_start" | "done" | "error"; reason?: "error" | "aborted" };
@@ -60,7 +60,7 @@ test("records timed out attempts", async () => {
 	let time = 0;
 	const clock = fakeTimers();
 	const samples: AttemptLatencySample[] = [];
-	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, timeoutsFor: () => ({ firstEventMs: 10 }), now: () => time, open: async (target) => target === "a/model" ? never() : events({ type: "done" }), forward: () => undefined, warn: () => undefined, onLatency: (sample) => samples.push(sample) });
+	const run = runFallbackChain({ role: "coder", targets: ["a/model", "b/model"], timers: clock.api, policy: { timeouts: { firstEventMs: 10 }, cooldown: BUILT_IN_COOLDOWN_POLICY }, now: () => time, open: async (target) => target === "a/model" ? never() : events({ type: "done" }), forward: () => undefined, warn: () => undefined, onLatency: (sample) => samples.push(sample) });
 	await turn(); time = 10; clock.fire(10); await run;
 	assert.equal(samples[0]?.outcome, "timeout");
 	assert.equal(samples[0]?.timeoutKind, "first event");

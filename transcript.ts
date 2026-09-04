@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import type { DebugLog } from "./debug-log.ts";
+import type { PolicyWarning } from "./alias-config.ts";
 import { describeFailure, type AliasExpansionWarning, type FailoverEntryData } from "./fallback.ts";
 import { formatLatencyReportEntry, type LatencyReportEntryData } from "./latency-report.ts";
 import type { AliasSession } from "./session-status.ts";
@@ -10,17 +11,22 @@ export const FAILOVER_ENTRY = "model-alias-failover";
 export const RESET_ENTRY = "model-alias-reset";
 export const LATENCY_REPORT_ENTRY = "model-alias-latency-report";
 export const CONFIG_WARNING_ENTRY = "model-alias-config-warning";
+export const POLICY_WARNING_ENTRY = "model-alias-policy-warning";
 
 export function formatConfigWarning(data: AliasExpansionWarning): string {
 	return `Alias "${data.role}" skipped target "${data.target}": ${data.reason}`;
 }
 
 export function appendConfigWarningEntry(pi: ExtensionAPI, data: AliasExpansionWarning, debugLog: DebugLog): void {
-	try {
-		pi.appendEntry<AliasExpansionWarning>(CONFIG_WARNING_ENTRY, data);
-	} catch (error) {
-		debugLog.log("append-entry-error", { message: describeFailure(error) });
-	}
+	appendWarningEntry(pi, CONFIG_WARNING_ENTRY, data, debugLog);
+}
+
+export function formatPolicyWarning(data: PolicyWarning): string {
+	return `Alias "${data.role}" is using its last valid policy because the current config could not load: ${data.reason}`;
+}
+
+export function appendPolicyWarningEntry(pi: ExtensionAPI, data: PolicyWarning, debugLog: DebugLog): void {
+	appendWarningEntry(pi, POLICY_WARNING_ENTRY, data, debugLog);
 }
 
 export function reportFailover(data: FailoverEntryData, session: AliasSession, debugLog: DebugLog): void {
@@ -47,13 +53,18 @@ export function appendLatencyReportEntry(pi: ExtensionAPI, data: LatencyReportEn
 
 export function registerTranscriptRenderers(pi: ExtensionAPI): void {
 	pi.registerEntryRenderer<Partial<AliasExpansionWarning>>(CONFIG_WARNING_ENTRY, (entry, _opts, theme) => {
-		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
 		const data = entry.data;
 		const summary = data?.role && data?.target
 			? formatConfigWarning({ role: data.role, target: data.target, reason: data.reason ?? "unknown reason" })
 			: "Missing alias config warning details";
-		box.addChild(new Text(`${theme.fg("warning", "[model-alias]")} ${summary}`, 0, 0));
-		return box;
+		return warningBox(theme, summary);
+	});
+	pi.registerEntryRenderer<Partial<PolicyWarning>>(POLICY_WARNING_ENTRY, (entry, _opts, theme) => {
+		const data = entry.data;
+		const summary = data?.role
+			? formatPolicyWarning({ role: data.role, reason: data.reason ?? "unknown reason" })
+			: "Missing alias policy warning details";
+		return warningBox(theme, summary);
 	});
 	pi.registerEntryRenderer<{ clearedCount?: number }>(RESET_ENTRY, (entry, _opts, theme) => {
 		const clearedCount = finiteNumber(entry.data?.clearedCount);
@@ -96,4 +107,18 @@ export function registerTranscriptRenderers(pi: ExtensionAPI): void {
 		}
 		return box;
 	});
+}
+
+function appendWarningEntry<T>(pi: ExtensionAPI, entryType: string, data: T, debugLog: DebugLog): void {
+	try {
+		pi.appendEntry<T>(entryType, data);
+	} catch (error) {
+		debugLog.log("append-entry-error", { message: describeFailure(error) });
+	}
+}
+
+function warningBox(theme: { fg(color: string, text: string): string; bg(color: string, text: string): string }, summary: string): Box {
+	const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+	box.addChild(new Text(`${theme.fg("warning", "[model-alias]")} ${summary}`, 0, 0));
+	return box;
 }

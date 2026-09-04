@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { archiveTimestampFor } from "./debug-log.ts";
 import { type LatencySample, TIMEOUT_KINDS, type TimeoutKind } from "./latency-stats.ts";
 
 export interface LegacyTimeout {
@@ -14,14 +16,38 @@ export interface LatencyLogReport {
 }
 
 export type ReadLogFile = (path: string) => string | undefined;
+export type ListLogDir = (path: string) => string[];
 
 export const DEFAULT_LATENCY_LOG_PATH = "logs/pi-model-alias-debug.jsonl";
 export const EXTENSION_LATENCY_LOG_PATH = fileURLToPath(
 	new URL("./logs/pi-model-alias-debug.jsonl", import.meta.url),
 );
 
-export function expandLogPaths(paths: readonly string[]): string[] {
-	return [...new Set(paths.flatMap((path) => (path.endsWith(".old") ? [path] : [path, `${path}.old`])) )];
+/** Retained generations oldest first, so the active file's records land last. */
+export function expandLogPaths(paths: readonly string[], listDir: ListLogDir = listLogDir): string[] {
+	const expanded = paths.flatMap((path) => (path.endsWith(".old") ? [path] : retainedPaths(path, listDir)));
+	return [...new Set(expanded)];
+}
+
+function retainedPaths(activePath: string, listDir: ListLogDir): string[] {
+	const directory = dirname(activePath);
+	const activeName = basename(activePath);
+	const archives = listDir(directory)
+		.flatMap((name) => {
+			const archivedAt = archiveTimestampFor(name, activeName);
+			return archivedAt === undefined ? [] : [{ path: join(directory, name), archivedAt }];
+		})
+		.sort((left, right) => left.archivedAt - right.archivedAt)
+		.map(({ path }) => path);
+	return [`${activePath}.old`, ...archives, join(directory, activeName)];
+}
+
+function listLogDir(path: string): string[] {
+	try {
+		return readdirSync(path);
+	} catch {
+		return [];
+	}
 }
 
 export function readLatencyLog(paths: readonly string[], readFile: ReadLogFile = readLogFile): LatencyLogReport {

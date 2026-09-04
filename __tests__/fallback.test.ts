@@ -7,6 +7,9 @@ import {
 	registerAliasApiProvider,
 } from "../api-registration.ts";
 import {
+	BUILT_IN_COOLDOWN_POLICY,
+	COOLDOWN_BASE_MS,
+	COOLDOWN_CAP_MS,
 	createCooldownRegistry,
 	failureStopReason,
 	formatExhaustionError,
@@ -285,7 +288,12 @@ test("fails over when a target throws before its first visible event", async () 
 	assert.deepEqual(warnings, ["bad/model: connection refused -> good/model"]);
 });
 
-test("grows cooldowns exponentially and caps them at thirty minutes", async () => {
+test("pins the configured cooldown base and cap", () => {
+	assert.equal(COOLDOWN_BASE_MS, 300_000);
+	assert.equal(COOLDOWN_CAP_MS, 3_600_000);
+});
+
+test("grows cooldowns exponentially and caps them at sixty minutes", async () => {
 	let currentTime = 1_000;
 	const cooldowns = createCooldownRegistry(() => currentTime);
 	const durations: number[] = [];
@@ -305,7 +313,15 @@ test("grows cooldowns exponentially and caps them at thirty minutes", async () =
 		currentTime = cooldowns.state("bad/model")!.nextRetryAt;
 	}
 
-	assert.deepEqual(durations, [30_000, 60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000]);
+	assert.deepEqual(durations, [
+		COOLDOWN_BASE_MS,
+		COOLDOWN_BASE_MS * 2,
+		COOLDOWN_BASE_MS * 4,
+		COOLDOWN_BASE_MS * 8,
+		COOLDOWN_CAP_MS,
+		COOLDOWN_CAP_MS,
+		COOLDOWN_CAP_MS,
+	]);
 	assert.equal(cooldowns.state("bad/model")!.failCount, 7);
 });
 
@@ -337,6 +353,188 @@ test("resets a target cooldown when its stream commits", async () => {
 	await request();
 	assert.deepEqual(failCounts, [1, 1]);
 });
+
+test("keeps a target cooling until it reaches the configured success threshold", async () => {
+	const cooldowns = createCooldownRegistry(() => 0);
+	cooldowns.recordFailure("flaky/model");
+	const run = () =>
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			policy: { cooldown: { ...BUILT_IN_COOLDOWN_POLICY, resetSuccesses: 3 } },
+			open: async () => events({ type: "text_start" }, { type: "done", message: "ok" }),
+			forward: () => undefined,
+			warn: () => undefined,
+		});
+
+	await run();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 1);
+	await run();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 2);
+	await run();
+	assert.equal(cooldowns.state("flaky/model"), undefined);
+});
+
+test("an intervening failure resets the success streak toward the configured threshold", async () => {
+	const cooldowns = createCooldownRegistry(() => 0);
+	cooldowns.recordFailure("flaky/model");
+	const succeed = () =>
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			policy: { cooldown: { ...BUILT_IN_COOLDOWN_POLICY, resetSuccesses: 3 } },
+			open: async () => events({ type: "text_start" }, { type: "done", message: "ok" }),
+			forward: () => undefined,
+			warn: () => undefined,
+		});
+
+	await succeed();
+	await succeed();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 2);
+
+	await assert.rejects(
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			policy: { cooldown: { ...BUILT_IN_COOLDOWN_POLICY, resetSuccesses: 3 } },
+			open: async () => throwBeforeEvent("flaky again"),
+			forward: () => undefined,
+			warn: () => undefined,
+		}),
+	);
+	assert.equal(cooldowns.state("flaky/model")!.successCount, undefined);
+
+	await succeed();
+	await succeed();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 2);
+});
+
+test("a post-commit failure resets an in-progress success streak", async () => {
+	const cooldowns = createCooldownRegistry(() => 0);
+	cooldowns.recordFailure("flaky/model");
+	const succeed = () =>
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			policy: { cooldown: { ...BUILT_IN_COOLDOWN_POLICY, resetSuccesses: 3 } },
+			open: async () => events({ type: "text_start" }, { type: "done", message: "ok" }),
+			forward: () => undefined,
+			warn: () => undefined,
+		});
+	await succeed();
+	await succeed();
+	assert.equal(cooldowns.state("flaky/model")!.successCount, 2);
+
+	await assert.rejects(
+		runFallbackChain({
+			role: "role",
+			targets: ["flaky/model"],
+			cooldowns,
+			policy: { cooldown: { ...BUILT_IN_COOLDOWN_POLICY, resetSuccesses: 3 } },
+			open: async () => emitTwoThenThrow(),
+			forward: () => undefined,
+			warn: () => assert.fail("a post-commit failure must not warn about failover"),
+		}),
+		/stream broke/u,
+	);
+	assert.equal(cooldowns.state("flaky/model")!.successCount, undefined);
+});
+
+test("parses cooldown policy defaults, overrides, and legacy reset compatibility", () => {
+	const withDefault = parseAliasConfig({ role: "good/model" });
+	assert.deepEqual(withDefault.policyFor("role").cooldown, BUILT_IN_COOLDOWN_POLICY);
+
+	const legacy = parseAliasConfig({ $defaults: { cooldownResetSuccesses: 5 }, role: "good/model" });
+	assert.equal(legacy.policyFor("role").cooldown.resetSuccesses, 5);
+
+	const unified = parseAliasConfig({
+		$defaults: { cooldown: { baseMs: 1_000, capMs: 8_000, resetSuccesses: 2 } },
+		strict: { targets: "good/model", cooldown: { capMs: 4_000 } },
+		inherits: "good/model",
+	});
+	assert.deepEqual(unified.policyFor("inherits").cooldown, { baseMs: 1_000, capMs: 8_000, resetSuccesses: 2 });
+	assert.deepEqual(unified.policyFor("strict").cooldown, { baseMs: 1_000, capMs: 4_000, resetSuccesses: 2 });
+
+	assert.throws(() => parseAliasConfig({ $defaults: { cooldownResetSuccesses: 0 } }), /invalid mapping for "\$defaults"/u);
+	assert.throws(() => parseAliasConfig({ $defaults: { cooldownResetSuccesses: 1.5 } }), /invalid mapping for "\$defaults"/u);
+	assert.throws(
+		() => parseAliasConfig({ $defaults: { cooldown: { resetSuccesses: 2 }, cooldownResetSuccesses: 3 } }),
+		/not both/u,
+	);
+	assert.throws(() => parseAliasConfig({ $defaults: { cooldown: { baseMs: 9_000, capMs: 1_000 } } }), /exceeds capMs/u);
+	assert.throws(
+		() => parseAliasConfig({ conflict: { targets: "good/model", cooldown: { baseMs: 5_000, capMs: 1_000 } } }),
+		/exceeds capMs/u,
+	);
+	assert.throws(() => parseAliasConfig({ $defaults: { cooldown: { baseMs: 0 } } }), /invalid mapping for "\$defaults"/u);
+	assert.throws(() => parseAliasConfig({ $defaults: { cooldown: { baseMs: Number.NaN } } }), /invalid mapping/u);
+	assert.throws(() => parseAliasConfig({ $defaults: { cooldown: { unknown: 1 } } }), /invalid mapping/u);
+	assert.throws(
+		() => parseAliasConfig({ bad: { targets: "a/model", cooldown: { resetSuccesses: 0 } } }),
+		/invalid mapping for "bad"/u,
+	);
+});
+
+test("clamps an inherited base when only a shorter cap is configured", () => {
+	// One lowered cap must not disable every alias, so the inherited base follows it down.
+	const defaults = parseAliasConfig({ $defaults: { cooldown: { capMs: 60_000 } }, coder: "good/model" });
+	assert.deepEqual(defaults.policyFor("coder").cooldown, { baseMs: 60_000, capMs: 60_000, resetSuccesses: 1 });
+
+	const perAlias = parseAliasConfig({ coder: { targets: "good/model", cooldown: { capMs: 30_000 } } });
+	assert.deepEqual(perAlias.policyFor("coder").cooldown, { baseMs: 30_000, capMs: 30_000, resetSuccesses: 1 });
+
+	const belowExplicitDefault = parseAliasConfig({
+		$defaults: { cooldown: { baseMs: 120_000, capMs: 600_000 } },
+		coder: { targets: "good/model", cooldown: { capMs: 45_000 } },
+	});
+	assert.deepEqual(belowExplicitDefault.policyFor("coder").cooldown, {
+		baseMs: 45_000,
+		capMs: 45_000,
+		resetSuccesses: 1,
+	});
+});
+
+test("grows cooldowns from an alias policy and never shortens an active window", () => {
+	const cooldowns = createCooldownRegistry(() => 0);
+	const slow = { baseMs: 1_000, capMs: 8_000, resetSuccesses: 1 };
+
+	assert.deepEqual(
+		[1, 2, 3, 4, 5].map(() => cooldowns.recordFailure("target/model", slow).durationMs),
+		[1_000, 2_000, 4_000, 8_000, 8_000],
+	);
+
+	// Cooldown state is shared, so a shorter policy must not pull an active window closer.
+	const active = cooldowns.state("target/model")!.nextRetryAt;
+	const shortened = cooldowns.recordFailure("target/model", { baseMs: 10, capMs: 10, resetSuccesses: 1 });
+	assert.equal(shortened.nextRetryAt, active);
+	assert.equal(shortened.failCount, 6);
+});
+
+test("applies the requested alias reset threshold to shared target state", async () => {
+	const cooldowns = createCooldownRegistry(() => 0);
+	cooldowns.recordFailure("shared/model");
+	const succeedAs = (resetSuccesses: number) =>
+		runFallbackChain({
+			role: "role",
+			targets: ["shared/model"],
+			cooldowns,
+			policy: { cooldown: { ...BUILT_IN_COOLDOWN_POLICY, resetSuccesses } },
+			open: async () => events({ type: "text_start" }, { type: "done", message: "ok" }),
+			forward: () => undefined,
+			warn: () => undefined,
+		});
+
+	await succeedAs(3);
+	assert.equal(cooldowns.state("shared/model")!.successCount, 1);
+	// A one-success alias clears state another alias created.
+	await succeedAs(1);
+	assert.equal(cooldowns.state("shared/model"), undefined);
+});
+
 
 test("skips a target while its cooldown is active", async () => {
 	const cooldowns = createCooldownRegistry(() => 0);
@@ -715,7 +913,7 @@ test("in-memory clearAll wipes everything but counts only active cooldowns", () 
 	let currentTime = 0;
 	const cooldowns = createCooldownRegistry(() => currentTime);
 	cooldowns.recordFailure("provider/expired");
-	currentTime = 60_000;
+	currentTime = COOLDOWN_BASE_MS * 2;
 	cooldowns.recordFailure("provider/active");
 
 	assert.equal(cooldowns.clearAll(), 1);
