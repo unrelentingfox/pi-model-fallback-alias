@@ -7,11 +7,11 @@ import {
 	statSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { STATE_DIR } from "./state-paths.ts";
 
 const LOG_NAME = "pi-model-alias-debug.jsonl";
 const ROTATION_CHECK_INTERVAL = 200;
-const DEFAULT_LOG_DIR = fileURLToPath(new URL("./logs", import.meta.url));
+const DEFAULT_LOG_DIR = STATE_DIR;
 const DEFAULT_MAX_LOG_BYTES = 1024 * 1024;
 const DEFAULT_RETENTION_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;

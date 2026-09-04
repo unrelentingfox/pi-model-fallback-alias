@@ -10,10 +10,10 @@ import {
 } from "../status.ts";
 
 const modelLabelExamples = [
-	["amazon-bedrock/model-primary", "opus-4-8"],
-	["amazon-bedrock/us.anthropic.model-premium", "fable-5"],
-	["amazon-bedrock/model-legacy", "opus-4-6-v1"],
-	["provider-example/model-primary", "gpt-5.6-sol"],
+	["amazon-bedrock/model-primary", "model-primary"],
+	["amazon-bedrock/us.anthropic.model-premium", "model-premium"],
+	["amazon-bedrock/model-legacy", "model-legacy"],
+	["provider-example/model-primary", "model-primary"],
 	["baseten/moonshotai/Kimi-K3", "Kimi-K3"],
 ] as const;
 
@@ -69,7 +69,7 @@ test("formats one cooling target", () => {
 				remainingMs: 28_000,
 			},
 		]),
-		"cooldown: fable-5 28s",
+		"cooldown: model-premium 28s",
 	);
 });
 
@@ -85,7 +85,7 @@ test("formats cooling targets in declared order", () => {
 				remainingMs: 240_000,
 			},
 		]),
-		"cooldown: fable-5 28s, opus-5 4m",
+		"cooldown: model-premium 28s, opus-5 4m",
 	);
 });
 
@@ -99,7 +99,7 @@ test("formats a failover warning with the next target", () => {
 			cooldownMs: 30_000,
 			failCount: 1,
 		}),
-		'alias "fable-opus-fallback": fable-5 failed (throttled); falling back to opus-5 — cooldown 30s (failure 1)',
+		'alias "fable-opus-fallback": model-premium failed (throttled); falling back to opus-5 — cooldown 30s (failure 1)',
 	);
 });
 

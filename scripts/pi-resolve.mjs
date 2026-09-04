@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { registerHooks } from "node:module";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 const piPackageUrl = pathToFileURL(join(findPiRoot(), "package.json")).href;
@@ -24,6 +24,8 @@ function findPiRoot() {
 function piRootCandidates() {
 	const candidates = [];
 	if (process.env.PI_ROOT) candidates.push(process.env.PI_ROOT);
+	const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+	candidates.push(join(packageRoot, "node_modules", PI_PACKAGE));
 	const npmRoot = commandOutput("npm", ["root", "-g"]);
 	if (npmRoot) candidates.push(join(npmRoot, PI_PACKAGE));
 	const brewPrefix = commandOutput("brew", ["--prefix"]);

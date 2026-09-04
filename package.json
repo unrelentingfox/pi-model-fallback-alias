@@ -1,23 +1,64 @@
 {
-  "name": "pi-model-alias",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Fallback model aliases for Pi",
+  "name": "@unrelentingfox/pi-model-fallback-aliases",
+  "version": "0.1.0",
+  "description": "Stable Pi model aliases with ordered fallback, cooldowns, and latency controls",
+  "license": "MIT",
+  "author": "Dustin Fox",
   "type": "module",
   "main": "index.ts",
+  "files": [
+    "*.ts",
+    "scripts/latency-report.mjs",
+    "scripts/pi-resolve.mjs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "model-alias",
+    "fallback"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unrelentingfox/pi-model-fallback-aliases.git"
+  },
+  "homepage": "https://github.com/unrelentingfox/pi-model-fallback-aliases#readme",
+  "bugs": {
+    "url": "https://github.com/unrelentingfox/pi-model-fallback-aliases/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
   "scripts": {
     "test": "node --import ./scripts/pi-resolve.mjs --test __tests__/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "check:pack": "node scripts/check-pack.mjs",
+    "check": "npm run test && npm run typecheck && npm run check:pack"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {
       "optional": true
     },
     "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
       "optional": true
     }
   },

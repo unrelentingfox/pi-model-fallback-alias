@@ -6,7 +6,6 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { DebugLog } from "./debug-log.ts";
 import {
 	nextCooldown,
@@ -14,9 +13,10 @@ import {
 	type CooldownRegistry,
 	type CooldownState,
 } from "./fallback.ts";
+import { STATE_DIR } from "./state-paths.ts";
 
 const STATE_NAME = "cooldown-state.json";
-const DEFAULT_STATE_DIR = fileURLToPath(new URL("./logs", import.meta.url));
+const DEFAULT_STATE_DIR = STATE_DIR;
 const STALE_ENTRY_AGE_MS = 60 * 60_000;
 
 type CooldownEntries = Record<string, CooldownState>;

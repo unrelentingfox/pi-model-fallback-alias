@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { archiveTimestampFor } from "./debug-log.ts";
 import { type LatencySample, TIMEOUT_KINDS, type TimeoutKind } from "./latency-stats.ts";
+import { STATE_DIR } from "./state-paths.ts";
 
 export interface LegacyTimeout {
 	role: string;
@@ -18,10 +18,8 @@ export interface LatencyLogReport {
 export type ReadLogFile = (path: string) => string | undefined;
 export type ListLogDir = (path: string) => string[];
 
-export const DEFAULT_LATENCY_LOG_PATH = "logs/pi-model-alias-debug.jsonl";
-export const EXTENSION_LATENCY_LOG_PATH = fileURLToPath(
-	new URL("./logs/pi-model-alias-debug.jsonl", import.meta.url),
-);
+export const DEFAULT_LATENCY_LOG_PATH = join(STATE_DIR, "pi-model-alias-debug.jsonl");
+export const EXTENSION_LATENCY_LOG_PATH = DEFAULT_LATENCY_LOG_PATH;
 
 /** Retained generations oldest first, so the active file's records land last. */
 export function expandLogPaths(paths: readonly string[], listDir: ListLogDir = listLogDir): string[] {
