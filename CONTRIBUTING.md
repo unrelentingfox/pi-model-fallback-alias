@@ -6,3 +6,4 @@
 4. Keep model examples provider-neutral and never commit credentials or runtime state.
 
 Use semantic commit subjects such as `fix: preserve alias identity`.
+Follow [RELEASING.md](RELEASING.md); the first npm publication is manual, and later matching GitHub releases publish with provenance.

@@ -12,7 +12,8 @@
     "scripts/pi-resolve.mjs",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "RELEASING.md"
   ],
   "keywords": [
     "pi-package",
