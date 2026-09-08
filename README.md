@@ -10,7 +10,7 @@ durable transcript warnings without owning target-provider credentials.
 Requires Node 22.19 or newer and is tested against Pi 0.84.4.
 
 ```bash
-pi install npm:@unrelentingfox/pi-model-fallback-alias@0.1.0
+pi install npm:pi-model-fallback-alias@0.1.0
 ```
 
 Run `/reload` in a live session after installation or configuration changes.
