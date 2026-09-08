@@ -18,8 +18,9 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@^11.5.1
       - run: npm ci
       - name: Verify release tag
-        run: test "$GITHUB_REF_NAME" = "v$(node -p 'require(\"./package.json\").version')"
+        run: node -e 'const { version } = require("./package.json"); if (process.env.GITHUB_REF_NAME !== `v${version}`) process.exit(1)'
       - run: npm run check
       - run: npm publish --access public --provenance

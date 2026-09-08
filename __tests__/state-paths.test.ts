@@ -5,7 +5,7 @@ import { resolveStateDir, STATE_DIR_ENV } from "../state-paths.ts";
 
 describe("resolveStateDir", () => {
 	it("stores state below the Pi agent directory by default", () => {
-		assert.equal(resolveStateDir({}, "/agent"), resolve("/agent/state/pi-model-fallback-aliases"));
+		assert.equal(resolveStateDir({}, "/agent"), resolve("/agent/state/pi-model-fallback-alias"));
 	});
 
 	it("uses the configured state directory", () => {
@@ -13,6 +13,6 @@ describe("resolveStateDir", () => {
 	});
 
 	it("ignores an empty state directory override", () => {
-		assert.equal(resolveStateDir({ [STATE_DIR_ENV]: "  " }, "/agent"), resolve("/agent/state/pi-model-fallback-aliases"));
+		assert.equal(resolveStateDir({ [STATE_DIR_ENV]: "  " }, "/agent"), resolve("/agent/state/pi-model-fallback-alias"));
 	});
 });

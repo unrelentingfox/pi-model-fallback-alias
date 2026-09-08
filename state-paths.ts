@@ -8,7 +8,7 @@ export function resolveStateDir(
 	agentDir: string = getAgentDir(),
 ): string {
 	const configured = env[STATE_DIR_ENV]?.trim();
-	return configured ? resolve(configured) : resolve(agentDir, "state", "pi-model-fallback-aliases");
+	return configured ? resolve(configured) : resolve(agentDir, "state", "pi-model-fallback-alias");
 }
 
 export const STATE_DIR = resolveStateDir();
