@@ -6,46 +6,23 @@ import {
 	formatDuration,
 	formatFailoverWarning,
 	formatFooterStatus,
-	shortModelLabel,
 } from "../status.ts";
 
-const modelLabelExamples = [
-	["amazon-bedrock/model-primary", "model-primary"],
-	["amazon-bedrock/us.anthropic.model-premium", "model-premium"],
-	["amazon-bedrock/model-legacy", "model-legacy"],
-	["provider-example/model-primary", "model-primary"],
-	["baseten/moonshotai/Kimi-K3", "Kimi-K3"],
-] as const;
-
-for (const [targetRef, expected] of modelLabelExamples) {
-	test(`shortens ${targetRef}`, () => {
-		assert.equal(shortModelLabel(targetRef), expected);
-	});
-}
-
-test("leaves an unprefixed model segment unchanged", () => {
-	assert.equal(shortModelLabel("provider/custom-model"), "custom-model");
-});
-
-test("defaults a missing model label to unknown", () => {
-	assert.equal(shortModelLabel(undefined), "unknown");
-});
-
 test("formats a model-only footer", () => {
-	assert.equal(formatFooterStatus("provider/sol", []), "sol");
+	assert.equal(formatFooterStatus("provider/sol", []), "provider/sol");
 });
 
 test("formats a model and cooldown footer", () => {
 	assert.equal(
 		formatFooterStatus("provider/sol", [{ targetRef: "provider/terra", remainingMs: 240_000 }]),
-		"sol · cooldown: terra 4m",
+		"provider/sol · cooldown: provider/terra 4m",
 	);
 });
 
 test("formats a cooldown-only footer", () => {
 	assert.equal(
 		formatFooterStatus(undefined, [{ targetRef: "provider/terra", remainingMs: 240_000 }]),
-		"cooldown: terra 4m",
+		"cooldown: provider/terra 4m",
 	);
 });
 
@@ -69,7 +46,7 @@ test("formats one cooling target", () => {
 				remainingMs: 28_000,
 			},
 		]),
-		"cooldown: model-premium 28s",
+		"cooldown: amazon-bedrock/global.anthropic.model-premium 28s",
 	);
 });
 
@@ -85,7 +62,7 @@ test("formats cooling targets in declared order", () => {
 				remainingMs: 240_000,
 			},
 		]),
-		"cooldown: model-premium 28s, opus-5 4m",
+		"cooldown: amazon-bedrock/global.anthropic.model-premium 28s, amazon-bedrock/global.anthropic.claude-opus-5 4m",
 	);
 });
 
@@ -99,7 +76,7 @@ test("formats a failover warning with the next target", () => {
 			cooldownMs: 30_000,
 			failCount: 1,
 		}),
-		'alias "fable-opus-fallback": model-premium failed (throttled); falling back to opus-5 — cooldown 30s (failure 1)',
+		'alias "fable-opus-fallback": amazon-bedrock/global.anthropic.model-premium failed (throttled); falling back to amazon-bedrock/global.anthropic.claude-opus-5 — cooldown 30s (failure 1)',
 	);
 });
 
@@ -119,7 +96,7 @@ test("formats a failover warning when the chain is exhausted", () => {
 			cooldownMs: 120_000,
 			failCount: 2,
 		}),
-		'alias "fable-opus-fallback": opus-5 failed (unavailable); chain exhausted — cooldown 2m (failure 2)',
+		'alias "fable-opus-fallback": amazon-bedrock/global.anthropic.claude-opus-5 failed (unavailable); chain exhausted — cooldown 2m (failure 2)',
 	);
 });
 

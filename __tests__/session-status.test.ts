@@ -82,8 +82,8 @@ describe("renderStatusTick", () => {
 			debugLog: NOOP_DEBUG_LOG,
 		});
 
-		assert.equal(text, "recorded");
-		assert.equal(captured.statuses.at(-1), "recorded");
+		assert.equal(text, "provider/recorded");
+		assert.equal(captured.statuses.at(-1), "provider/recorded");
 	});
 
 	it("updates the recorded target after failover", () => {
@@ -116,9 +116,9 @@ describe("renderStatusTick", () => {
 			debugLog: NOOP_DEBUG_LOG,
 		});
 
-		assert.equal(firstText, "primary");
-		assert.equal(failoverText, "fallback · cooldown: primary 1m");
-		assert.equal(captured.statuses.at(-1), "[muted]fallback · [warning]cooldown: primary 1m");
+		assert.equal(firstText, "provider/primary");
+		assert.equal(failoverText, "provider/fallback · cooldown: provider/primary 1m");
+		assert.equal(captured.statuses.at(-1), "[muted]provider/fallback · [warning]cooldown: provider/primary 1m");
 	});
 
 	it("renders the next target while the failed target cools", () => {
@@ -142,8 +142,8 @@ describe("renderStatusTick", () => {
 			debugLog: NOOP_DEBUG_LOG,
 		});
 
-		assert.equal(text, "opus-5 · cooldown: fable-5 30s");
-		assert.notEqual(text, "fable-5 · cooldown: fable-5 30s");
+		assert.equal(text, "provider/opus-5 · cooldown: provider/fable-5 30s");
+		assert.notEqual(text, "provider/fable-5 · cooldown: provider/fable-5 30s");
 	});
 
 	it("skips a cooled primary when no target has been recorded", () => {
@@ -164,7 +164,7 @@ describe("renderStatusTick", () => {
 			debugLog: NOOP_DEBUG_LOG,
 		});
 
-		assert.equal(text, "healthy · cooldown: primary 1m");
+		assert.equal(text, "provider/healthy · cooldown: provider/primary 1m");
 	});
 
 	it("shows the primary when the entire chain is cooling", () => {
@@ -182,7 +182,7 @@ describe("renderStatusTick", () => {
 			debugLog: NOOP_DEBUG_LOG,
 		});
 
-		assert.equal(text, "primary · cooldown: primary 1m, secondary 1m");
+		assert.equal(text, "provider/primary · cooldown: provider/primary 1m, provider/secondary 1m");
 	});
 
 	it("omits the model segment for a non-alias session model", () => {
@@ -201,7 +201,7 @@ describe("renderStatusTick", () => {
 			debugLog: NOOP_DEBUG_LOG,
 		});
 
-		assert.equal(text, "cooldown: primary 1m");
+		assert.equal(text, "cooldown: provider/primary 1m");
 	});
 
 	it("keeps the footer hidden without an alias session model or cooldowns", () => {
