@@ -1,5 +1,5 @@
 {
-  "name": "@unrelentingfox/pi-model-fallback-alias",
+  "name": "pi-model-fallback-alias",
   "version": "0.1.0",
   "description": "Stable Pi model aliases with ordered fallback, cooldowns, and latency controls",
   "license": "MIT",
