@@ -1,5 +1,3 @@
-const MODEL_PREFIX = /^(?:(?:global|us|eu|au|jp)\.)?(?:[^.]+\.)?(?:claude-)?/u;
-
 export interface CooldownStatusItem {
 	targetRef: string;
 	remainingMs: number;
@@ -13,13 +11,13 @@ export function formatFooterStatus(
 }
 
 export function formatModelStatus(targetRef: string | undefined): string | undefined {
-	return targetRef ? shortModelLabel(targetRef) : undefined;
+	return targetRef;
 }
 
 export function formatCooldownStatus(items: CooldownStatusItem[]): string | undefined {
 	if (items.length === 0) return undefined;
 	const entries = items.map(
-		({ targetRef, remainingMs }) => `${shortModelLabel(targetRef)} ${formatDuration(remainingMs)}`,
+		({ targetRef, remainingMs }) => `${targetRef} ${formatDuration(remainingMs)}`,
 	);
 	return `cooldown: ${entries.join(", ")}`;
 }
@@ -32,14 +30,6 @@ export function composeFooterStatus(
 	return segments.length > 0 ? segments.join(" · ") : undefined;
 }
 
-export function shortModelLabel(targetRef: string | undefined): string {
-	if (!targetRef) return "unknown";
-	const firstSlash = targetRef.indexOf("/");
-	const modelRef = firstSlash < 0 ? targetRef : targetRef.slice(firstSlash + 1);
-	const strippedRef = modelRef.replace(MODEL_PREFIX, "");
-	return strippedRef.split("/").at(-1) ?? strippedRef;
-}
-
 export function formatFailoverWarning(input: {
 	role?: string;
 	failedTarget?: string;
@@ -48,11 +38,11 @@ export function formatFailoverWarning(input: {
 	cooldownMs?: number;
 	failCount?: number;
 }): string {
-	const failedLabel = shortModelLabel(input.failedTarget);
-	const nextLabel = shortModelLabel(input.nextTarget);
-	const outcome = input.nextTarget ? `falling back to ${nextLabel}` : "chain exhausted";
+	const failedTarget = input.failedTarget ?? "unknown";
+	const nextTarget = input.nextTarget ?? "unknown";
+	const outcome = input.nextTarget ? `falling back to ${nextTarget}` : "chain exhausted";
 	return [
-		`alias "${input.role ?? "unknown"}": ${failedLabel} failed (${oneLine(input.reason)});`,
+		`alias "${input.role ?? "unknown"}": ${failedTarget} failed (${oneLine(input.reason)});`,
 		`${outcome} — cooldown ${formatDuration(input.cooldownMs)} (failure ${finiteNumber(input.failCount)})`,
 	].join(" ");
 }
