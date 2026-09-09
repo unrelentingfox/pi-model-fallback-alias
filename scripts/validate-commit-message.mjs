@@ -1,8 +1,26 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-const conventionalSubject = /^[a-z][a-z0-9-]*(\([^()]+\))?!?: \S.*$/;
-const generatedSubject = /^(Merge |Revert |fixup! |squash! |amend! )/;
+export const conventionalTypes = [
+  "build",
+  "chore",
+  "ci",
+  "deps",
+  "docs",
+  "feat",
+  "fix",
+  "perf",
+  "refactor",
+  "revert",
+  "style",
+  "test",
+];
+
+const conventionalSubject = new RegExp(
+  `^(${conventionalTypes.join("|")})(\\([^()]+\\))?!?: \\S.*$`,
+);
+const generatedSubject =
+  /^(Merge (branch|pull request|remote-tracking)|Revert "|fixup! |squash! |amend! )/;
 
 export function validateCommitMessage(message) {
   const subject = message

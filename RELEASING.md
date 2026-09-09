@@ -10,9 +10,12 @@ baseline.
 
 Every push to `main` runs Release Please. It opens or updates a release pull
 request from [Conventional Commits](https://github.com/googleapis/release-please#how-should-i-write-my-commits).
-Use `feat` for a minor release, `fix` for a patch release, and `!` or a
-`BREAKING CHANGE:` footer for a major release. Merging that pull request
-creates the matching GitHub release. The workflow publishes the current
+Use `feat` for a minor release, `fix` for a patch release, `deps` for a
+dependency release, and `!` in the PR title for a major release. GitHub uses
+the PR title as the squash commit subject and discards the commit body, so
+branch commit footers, `Release-As:`, and multi-entry release footers do not
+reach Release Please. Merging the release pull request creates the matching
+GitHub release. The workflow publishes the current released version when it is
 missing from npm, so rerunning it after a registry failure is safe. Versions
 already present on npm are skipped. After a registry failure, rerun the failed
 Release workflow or push another commit to `main`; the `detect-publish` job will
