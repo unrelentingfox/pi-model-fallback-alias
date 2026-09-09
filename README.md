@@ -1,5 +1,11 @@
 # Pi Model Fallback Aliases
 
+[![npm version](https://img.shields.io/npm/v/pi-model-fallback-alias)](https://www.npmjs.com/package/pi-model-fallback-alias)
+[![npm downloads](https://img.shields.io/npm/dm/pi-model-fallback-alias)](https://www.npmjs.com/package/pi-model-fallback-alias)
+[![CI](https://img.shields.io/github/actions/workflow/status/unrelentingfox/pi-model-fallback-alias/ci.yml?branch=main&label=CI)](https://github.com/unrelentingfox/pi-model-fallback-alias/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/node/v/pi-model-fallback-alias)](https://www.npmjs.com/package/pi-model-fallback-alias)
+[![License](https://img.shields.io/github/license/unrelentingfox/pi-model-fallback-alias)](https://github.com/unrelentingfox/pi-model-fallback-alias/blob/main/LICENSE)
+
 A [Pi](https://github.com/earendil-works/pi) extension that exposes stable
 `alias/*` role models backed by configurable provider/model chains. It adds
 pre-output failover, shared cooldowns, latency controls, footer status, and
@@ -10,7 +16,7 @@ durable transcript warnings without owning target-provider credentials.
 Requires Node 22.19 or newer and is tested against Pi 0.84.4.
 
 ```bash
-pi install npm:pi-model-fallback-alias@0.1.0
+pi install npm:pi-model-fallback-alias
 ```
 
 Run `/reload` in a live session after installation or configuration changes.
