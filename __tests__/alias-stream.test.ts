@@ -94,6 +94,24 @@ test("rewrites fallback success while retaining the fallback target", async () =
 	assert.equal(activeTargets.get("coder"), "target/fallback-model");
 });
 
+test("reports each selected target immediately", async () => {
+	const selected: Array<[string, string]> = [];
+	const { stream } = aliasStream(
+		{
+			"primary-model": asyncEvents({ type: "error", reason: "error", error: targetMessage({ stopReason: "error" }) }),
+			"fallback-model": asyncEvents(doneEvent(targetMessage({ model: "fallback-model" }))),
+		},
+		{ onTargetSelected: (role, targetRef) => selected.push([role, targetRef]) },
+	);
+
+	await collect(stream);
+
+	assert.deepEqual(selected, [
+		["coder", "target/primary-model"],
+		["coder", "target/fallback-model"],
+	]);
+});
+
 test("records response status without headers or failover", async () => {
 	const records: Array<{ event: string; data?: Record<string, unknown> }> = [];
 	const response = { status: 500, headers: undefined } as unknown as ProviderResponse;
@@ -224,6 +242,7 @@ interface AliasStreamTestOptions {
 	providerResponse?: ProviderResponse;
 	streamOptions?: StreamOptions;
 	log?(event: string, data?: Record<string, unknown>): void;
+	onTargetSelected?(role: string, targetRef: string): void;
 	policy?: AliasPolicy;
 	configLoadMs?: number;
 	policyLoad?(): { policy: AliasPolicy; configLoadMs: number; degraded: boolean };
@@ -267,6 +286,7 @@ function aliasStream(
 		},
 		cooldowns: createCooldownRegistry(),
 		debugLog: { log: options.log ?? (() => undefined) },
+		onTargetSelected: options.onTargetSelected ?? (() => undefined),
 		onFailover: () => undefined,
 	} as unknown as Parameters<typeof createAliasStreams>[0]);
 	return { stream: streams.stream(aliasModel(), { messages: [] }, options.streamOptions), activeTargets };

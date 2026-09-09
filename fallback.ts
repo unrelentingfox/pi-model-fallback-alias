@@ -38,14 +38,21 @@ export interface AliasPolicyInput {
 
 export interface AliasConfig {
 	aliases: AliasMap;
+	statusRefreshMs: number;
 	policyFor(role: string): AliasPolicy;
 	warnings: readonly AliasExpansionWarning[];
+	settingWarnings: readonly AliasSettingWarning[];
 }
 
 /** A nested-alias ref skipped during expansion (cycle, unknown alias, or depth cap). */
 export interface AliasExpansionWarning {
 	role: string;
 	target: string;
+	reason: string;
+}
+
+export interface AliasSettingWarning {
+	setting: string;
 	reason: string;
 }
 
@@ -156,6 +163,8 @@ const DEFAULT_TIMERS: TimerApi = {
 
 export const COOLDOWN_BASE_MS = 5 * 60_000;
 export const COOLDOWN_CAP_MS = 60 * 60_000;
+export const DEFAULT_STATUS_REFRESH_MS = 2_000;
+export const MAX_STATUS_REFRESH_MS = 60_000;
 
 /** Policy used when a config supplies no cooldown fields. */
 export const BUILT_IN_COOLDOWN_POLICY: CooldownPolicy = {
@@ -228,11 +237,12 @@ function growthMs(failCount: number, cooldown: CooldownPolicy): number {
 export function parseAliasConfig(value: unknown): AliasConfig {
 	if (!isRecord(value)) throw new Error("expected a JSON object");
 
+	const settings = parseSettings(value.$settings);
 	const defaults = resolvePolicy("$defaults", BUILT_IN_POLICY, parseDefaultsPolicy(value.$defaults));
 	const aliases = new Map<string, readonly string[]>();
 	const rolePolicies = new Map<string, AliasPolicy>();
 	for (const [role, configuredTargets] of Object.entries(value)) {
-		if (role === "$defaults") continue;
+		if (role.startsWith("$")) continue;
 		const config = parseRoleConfig(role, configuredTargets);
 		aliases.set(role, config.targets);
 		rolePolicies.set(role, resolvePolicy(role, defaults, config.policy));
@@ -240,10 +250,12 @@ export function parseAliasConfig(value: unknown): AliasConfig {
 	const expanded = expandNestedAliases(aliases);
 	return {
 		aliases: expanded.aliases,
+		statusRefreshMs: settings.statusRefreshMs,
 		policyFor(role) {
 			return rolePolicies.get(role) ?? defaults;
 		},
 		warnings: expanded.warnings,
+		settingWarnings: settings.warnings,
 	};
 }
 
@@ -654,6 +666,43 @@ function parseDefaultsPolicy(value: unknown): AliasPolicyInput {
 	return {
 		...policy,
 		cooldown: { ...policy.cooldown, resetSuccesses: parseResetSuccesses("$defaults", value.cooldownResetSuccesses) },
+	};
+}
+
+function parseSettings(value: unknown): { statusRefreshMs: number; warnings: AliasSettingWarning[] } {
+	if (value === undefined) return { statusRefreshMs: DEFAULT_STATUS_REFRESH_MS, warnings: [] };
+	if (!isRecord(value)) {
+		return invalidSettings("$settings", "expected an object");
+	}
+
+	const unknownKeys = Object.keys(value).filter((key) => key !== "statusRefreshMs");
+	if (unknownKeys.length > 0) {
+		return invalidSettings("$settings", `unknown setting(s): ${unknownKeys.join(", ")}`);
+	}
+	if (value.statusRefreshMs === undefined) {
+		return { statusRefreshMs: DEFAULT_STATUS_REFRESH_MS, warnings: [] };
+	}
+	if (
+		typeof value.statusRefreshMs !== "number" ||
+		!Number.isSafeInteger(value.statusRefreshMs) ||
+		value.statusRefreshMs <= 0 ||
+		value.statusRefreshMs > MAX_STATUS_REFRESH_MS
+	) {
+		return invalidSettings(
+			"$settings.statusRefreshMs",
+			`expected an integer from 1 to ${MAX_STATUS_REFRESH_MS}`,
+		);
+	}
+	return { statusRefreshMs: value.statusRefreshMs, warnings: [] };
+}
+
+function invalidSettings(setting: string, reason: string): {
+	statusRefreshMs: number;
+	warnings: AliasSettingWarning[];
+} {
+	return {
+		statusRefreshMs: DEFAULT_STATUS_REFRESH_MS,
+		warnings: [{ setting, reason: `${reason}; using ${DEFAULT_STATUS_REFRESH_MS}ms` }],
 	};
 }
 

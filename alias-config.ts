@@ -2,15 +2,24 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { DebugLog } from "./debug-log.ts";
-import { BUILT_IN_POLICY, describeFailure, parseAliasConfig, type AliasConfig, type AliasPolicy } from "./fallback.ts";
+import {
+	BUILT_IN_POLICY,
+	DEFAULT_STATUS_REFRESH_MS,
+	describeFailure,
+	parseAliasConfig,
+	type AliasConfig,
+	type AliasPolicy,
+} from "./fallback.ts";
 
 const DEFAULT_MAP_PATH = join(getAgentDir(), "model-alias.json");
 export const MAP_PATH = process.env.PI_MODEL_ALIAS_MAP || DEFAULT_MAP_PATH;
 
 const EMPTY_CONFIG: AliasConfig = {
 	aliases: new Map(),
+	statusRefreshMs: DEFAULT_STATUS_REFRESH_MS,
 	policyFor: () => BUILT_IN_POLICY,
 	warnings: [],
+	settingWarnings: [],
 };
 
 /** One requested-alias policy plus the cost of obtaining it. */

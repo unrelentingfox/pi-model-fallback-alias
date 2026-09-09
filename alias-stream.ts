@@ -40,6 +40,7 @@ interface AliasStreamDependencies {
 	session: AliasSession<Registry, ExtensionContext["ui"]>;
 	cooldowns: CooldownRegistry;
 	debugLog: DebugLog;
+	onTargetSelected(role: string, targetRef: string): void;
 	onFailover(data: FailoverEntryData): void;
 }
 
@@ -62,7 +63,16 @@ function createFallbackStream(
 	dependencies: AliasStreamDependencies,
 ): AssistantMessageEventStream {
 	const output = createAssistantMessageEventStream();
-	const { aliases, policyFor, aliasModels, session, cooldowns, debugLog, onFailover } = dependencies;
+	const {
+		aliases,
+		policyFor,
+		aliasModels,
+		session,
+		cooldowns,
+		debugLog,
+		onTargetSelected,
+		onFailover,
+	} = dependencies;
 	const registry = session.registry;
 	if (!registry) {
 		const error = new Error(`Model alias "${aliasModel.id}" cannot stream before a session starts in this process`);
@@ -95,6 +105,7 @@ function createFallbackStream(
 					linkedSignal(options?.signal, attemptSignal),
 				);
 				session.activeTargets.set(aliasModel.id, targetRef);
+				onTargetSelected(aliasModel.id, targetRef);
 				debugLog.log("open-attempt", { role: aliasModel.id, targetRef, ok: true });
 				return stream;
 			} catch (error) {
