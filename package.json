@@ -42,7 +42,7 @@
     ]
   },
   "scripts": {
-    "test": "node --import ./scripts/pi-resolve.mjs --test __tests__/*.test.ts",
+    "test": "node --import ./scripts/pi-resolve.mjs --test __tests__/*.test.ts __tests__/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "check:pack": "node scripts/check-pack.mjs",
     "check": "npm run test && npm run typecheck && npm run check:pack"
