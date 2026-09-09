@@ -147,10 +147,9 @@ Tests use pinned Pi 0.84.4 development packages. Runtime Pi packages remain
 optional wildcard peer dependencies because Pi supplies them when loading the
 extension. Continuous integration tests Node 22.19 and Node 24.
 
-Releases use semantic versioning. The first npm publication is manual; later
-GitHub releases trigger an OpenID Connect (OIDC) trusted publish with
-provenance. Follow [RELEASING.md](RELEASING.md) and update
-[CHANGELOG.md](CHANGELOG.md).
+Releases use semantic versioning. Release Please maintains the release pull
+request from semantic commits; merging it creates the GitHub release and
+publishes to npm with OpenID Connect (OIDC) provenance. Follow [RELEASING.md](RELEASING.md).
 
 Repository: https://github.com/unrelentingfox/pi-model-fallback-alias
 
