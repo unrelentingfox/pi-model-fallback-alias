@@ -21,6 +21,10 @@ already present on npm are skipped. After a registry failure, rerun the failed
 Release workflow or push another commit to `main`; the `detect-publish` job will
 retry the missing version.
 
+Repository rules for `main` must require `Validate Conventional Commit title`.
+Enable this requirement after the title workflow first lands on `main`; the
+check starts with subsequent pull requests.
+
 The `npm` GitHub environment must remain enabled, and npm trusted publishing
 must authorize:
 
