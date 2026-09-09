@@ -21,7 +21,9 @@ release. Prefer a squash merge so the final commit produces one clear
 changelog entry.
 
 The tracked `commit-msg` hook rejects non-conforming subjects. Run
-`npm run hooks:install` once per clone to enable it.
+`npm run hooks:install` once per clone to enable it. GitHub also validates PR
+titles because the configured squash merge uses the PR title as the final
+commit subject.
 
 Follow [RELEASING.md](RELEASING.md); merging the Release Please pull request
 creates the GitHub release and publishes it to npm with provenance.
