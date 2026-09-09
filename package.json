@@ -1,6 +1,6 @@
 {
   "name": "pi-model-fallback-alias",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Stable Pi model aliases with ordered fallback, cooldowns, and latency controls",
   "license": "MIT",
   "author": "Dustin Fox",
