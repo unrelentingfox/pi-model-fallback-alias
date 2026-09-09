@@ -17,15 +17,33 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-    outputs:
-      release-created: ${{ steps.release.outputs.release_created }}
     steps:
-      - id: release
-        uses: googleapis/release-please-action@v5
+      - uses: googleapis/release-please-action@v5
+
+  detect-publish:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should-publish: ${{ steps.status.outputs.should-publish }}
+      tag: ${{ steps.status.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: main
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - id: status
+        run: node scripts/release-publish-status.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
   publish:
-    needs: release
-    if: needs.release.outputs.release-created == 'true'
+    needs: detect-publish
+    if: needs.detect-publish.outputs.should-publish == 'true'
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -33,6 +51,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: ${{ needs.detect-publish.outputs.tag }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
