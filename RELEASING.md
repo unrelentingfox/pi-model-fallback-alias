@@ -9,8 +9,10 @@ baseline.
 ## Automated releases
 
 Every push to `main` runs Release Please. It opens or updates a release pull
-request from semantic commits. Merging that pull request creates the matching
-GitHub release. The workflow publishes the current released version when it is
+request from [Conventional Commits](https://github.com/googleapis/release-please#how-should-i-write-my-commits).
+Use `feat` for a minor release, `fix` for a patch release, and `!` or a
+`BREAKING CHANGE:` footer for a major release. Merging that pull request
+creates the matching GitHub release. The workflow publishes the current
 missing from npm, so rerunning it after a registry failure is safe. Versions
 already present on npm are skipped. After a registry failure, rerun the failed
 Release workflow or push another commit to `main`; the `detect-publish` job will

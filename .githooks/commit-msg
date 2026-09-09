@@ -1,0 +1,4 @@
+#!/bin/sh
+
+root="$(git rev-parse --show-toplevel)"
+exec node "$root/scripts/validate-commit-message.mjs" "$1"
