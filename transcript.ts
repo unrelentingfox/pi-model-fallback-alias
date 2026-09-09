@@ -2,7 +2,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import type { DebugLog } from "./debug-log.ts";
 import type { PolicyWarning } from "./alias-config.ts";
-import { describeFailure, type AliasExpansionWarning, type FailoverEntryData } from "./fallback.ts";
+import {
+	describeFailure,
+	type AliasExpansionWarning,
+	type AliasSettingWarning,
+	type FailoverEntryData,
+} from "./fallback.ts";
 import { formatLatencyReportEntry, type LatencyReportEntryData } from "./latency-report.ts";
 import type { AliasSession } from "./session-status.ts";
 import { finiteNumber, formatDuration, formatFailoverWarning } from "./status.ts";
@@ -11,6 +16,7 @@ export const FAILOVER_ENTRY = "model-alias-failover";
 export const RESET_ENTRY = "model-alias-reset";
 export const LATENCY_REPORT_ENTRY = "model-alias-latency-report";
 export const CONFIG_WARNING_ENTRY = "model-alias-config-warning";
+export const SETTING_WARNING_ENTRY = "model-alias-setting-warning";
 export const POLICY_WARNING_ENTRY = "model-alias-policy-warning";
 
 export function formatConfigWarning(data: AliasExpansionWarning): string {
@@ -19,6 +25,14 @@ export function formatConfigWarning(data: AliasExpansionWarning): string {
 
 export function appendConfigWarningEntry(pi: ExtensionAPI, data: AliasExpansionWarning, debugLog: DebugLog): void {
 	appendWarningEntry(pi, CONFIG_WARNING_ENTRY, data, debugLog);
+}
+
+export function formatSettingWarning(data: AliasSettingWarning): string {
+	return `Invalid ${data.setting}: ${data.reason}`;
+}
+
+export function appendSettingWarningEntry(pi: ExtensionAPI, data: AliasSettingWarning, debugLog: DebugLog): void {
+	appendWarningEntry(pi, SETTING_WARNING_ENTRY, data, debugLog);
 }
 
 export function formatPolicyWarning(data: PolicyWarning): string {
@@ -57,6 +71,13 @@ export function registerTranscriptRenderers(pi: ExtensionAPI): void {
 		const summary = data?.role && data?.target
 			? formatConfigWarning({ role: data.role, target: data.target, reason: data.reason ?? "unknown reason" })
 			: "Missing alias config warning details";
+		return warningBox(theme, summary);
+	});
+	pi.registerEntryRenderer<Partial<AliasSettingWarning>>(SETTING_WARNING_ENTRY, (entry, _opts, theme) => {
+		const data = entry.data;
+		const summary = data?.setting
+			? formatSettingWarning({ setting: data.setting, reason: data.reason ?? "unknown reason" })
+			: "Missing alias setting warning details";
 		return warningBox(theme, summary);
 	});
 	pi.registerEntryRenderer<Partial<PolicyWarning>>(POLICY_WARNING_ENTRY, (entry, _opts, theme) => {

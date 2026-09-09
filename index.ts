@@ -17,8 +17,10 @@ import {
 	appendLatencyReportEntry,
 	appendPolicyWarningEntry,
 	appendResetEntry,
+	appendSettingWarningEntry,
 	formatConfigWarning,
 	formatPolicyWarning,
+	formatSettingWarning,
 	registerTranscriptRenderers,
 	reportFailover,
 } from "./transcript.ts";
@@ -27,7 +29,6 @@ export { renderStatusTick, startSession } from "./session-status.ts";
 export type { AliasSessionContext, RenderStatusTickOptions } from "./session-status.ts";
 
 const PROVIDER_ID = "alias";
-const STATUS_REFRESH_INTERVAL_MS = 30_000;
 const DEBUG_LOG = createDebugLog();
 const TARGET_COOLDOWNS = createSharedCooldownRegistry({ debugLog: DEBUG_LOG });
 
@@ -38,6 +39,7 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	const aliasConfig = loadAliasConfig(DEBUG_LOG);
 	const { aliases } = aliasConfig;
 	let pendingConfigWarnings = [...aliasConfig.warnings];
+	let pendingSettingWarnings = [...aliasConfig.settingWarnings];
 	DEBUG_LOG.log("extension-load", { mapPath: MAP_PATH, aliases: [...aliases.keys()] });
 	if (aliases.size === 0) return;
 
@@ -62,8 +64,17 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 			DEBUG_LOG.log("ui-error", { operation: "status-tick", message: describeFailure(error) });
 		}
 	};
-	const statusRefreshInterval = setInterval(publishStatus, STATUS_REFRESH_INTERVAL_MS);
-	statusRefreshInterval.unref?.();
+	let statusRefreshInterval: ReturnType<typeof setInterval> | undefined;
+	const startStatusRefresh = () => {
+		if (statusRefreshInterval) return;
+		statusRefreshInterval = setInterval(publishStatus, aliasConfig.statusRefreshMs);
+		statusRefreshInterval.unref?.();
+	};
+	const stopStatusRefresh = () => {
+		if (!statusRefreshInterval) return;
+		clearInterval(statusRefreshInterval);
+		statusRefreshInterval = undefined;
+	};
 
 	const aliasModels = [...aliases.keys()].map((id) => aliasModel(id, PROVIDER_ID));
 	const policyFor = createPolicyLoader({
@@ -81,6 +92,9 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 		session,
 		cooldowns: TARGET_COOLDOWNS,
 		debugLog: DEBUG_LOG,
+		onTargetSelected() {
+			publishStatus();
+		},
 		onFailover(data) {
 			if (data.nextTarget) session.activeTargets.set(data.role, data.nextTarget);
 			reportFailover(data, session, DEBUG_LOG);
@@ -105,9 +119,19 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 		session.model = ctx.model;
 		if (startSession(session, ctx, DEBUG_LOG)) {
 			lastPushedText = undefined;
+			startStatusRefresh();
 			publishStatus();
 		}
 		initializeAliasMetadata(aliases, aliasModels, ctx.modelRegistry);
+		if (pendingSettingWarnings.length > 0) {
+			const warnings = pendingSettingWarnings;
+			pendingSettingWarnings = [];
+			for (const warning of warnings) {
+				DEBUG_LOG.log("setting-warning", { ...warning });
+				if (!session.hasUI) console.warn(`[pi-model-alias] ${formatSettingWarning(warning)}`);
+				appendSettingWarningEntry(pi, warning, DEBUG_LOG);
+			}
+		}
 		// Config warnings render once, for the user only: custom transcript
 		// entries never enter the model context.
 		if (pendingConfigWarnings.length > 0) {
@@ -119,6 +143,10 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 				appendConfigWarningEntry(pi, warning, DEBUG_LOG);
 			}
 		}
+	});
+
+	pi.on("session_shutdown", () => {
+		stopStatusRefresh();
 	});
 
 	pi.on("model_select", (event, ctx) => {

@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPolicyLoader, readAliasConfig } from "../alias-config.ts";
-import { BUILT_IN_COOLDOWN_POLICY, parseAliasConfig, type AliasConfig } from "../fallback.ts";
+import {
+	BUILT_IN_COOLDOWN_POLICY,
+	DEFAULT_STATUS_REFRESH_MS,
+	MAX_STATUS_REFRESH_MS,
+	parseAliasConfig,
+	type AliasConfig,
+} from "../fallback.ts";
 
 const PATH = "/fake/model-alias.json";
 
@@ -43,6 +49,44 @@ function loaderFor(
 		onWarning: (warning) => warnings.push(warning),
 	});
 }
+
+test("parses the extension-wide status refresh setting with a two-second default", () => {
+	assert.equal(parseAliasConfig({ coder: "provider/model" }).statusRefreshMs, DEFAULT_STATUS_REFRESH_MS);
+	assert.equal(
+		parseAliasConfig({ $settings: { statusRefreshMs: MAX_STATUS_REFRESH_MS }, coder: "provider/model" }).statusRefreshMs,
+		MAX_STATUS_REFRESH_MS,
+	);
+});
+
+test("warns and uses the default for invalid extension settings", () => {
+	const invalidValues = [0, -1, 1.5, Number.NaN, "2000", MAX_STATUS_REFRESH_MS + 1];
+	for (const statusRefreshMs of invalidValues) {
+		const config = parseAliasConfig({ $settings: { statusRefreshMs }, coder: "provider/model" });
+		assert.equal(config.statusRefreshMs, DEFAULT_STATUS_REFRESH_MS);
+		assert.equal(config.aliases.get("coder")?.[0], "provider/model");
+		assert.deepEqual(config.settingWarnings, [{
+			setting: "$settings.statusRefreshMs",
+			reason: `expected an integer from 1 to ${MAX_STATUS_REFRESH_MS}; using ${DEFAULT_STATUS_REFRESH_MS}ms`,
+		}]);
+	}
+
+	const unknown = parseAliasConfig({ $settings: { unknown: true }, coder: "provider/model" });
+	assert.equal(unknown.statusRefreshMs, DEFAULT_STATUS_REFRESH_MS);
+	assert.deepEqual(unknown.settingWarnings, [{
+		setting: "$settings",
+		reason: `unknown setting(s): unknown; using ${DEFAULT_STATUS_REFRESH_MS}ms`,
+	}]);
+});
+
+test("ignores top-level metadata keys prefixed with a dollar sign", () => {
+	const config = parseAliasConfig({
+		$comment: "local notes",
+		$metadata: { owner: "team" },
+		coder: "provider/model",
+	});
+
+	assert.deepEqual([...config.aliases], [["coder", ["provider/model"]]]);
+});
 
 test("resolves the current policy on every stream without reloading the extension", () => {
 	const file = new FakeConfigFile(configText(3));
