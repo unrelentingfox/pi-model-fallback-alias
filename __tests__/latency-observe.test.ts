@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BUILT_IN_COOLDOWN_POLICY, runFallbackChain, type AttemptLatencySample, type TimerApi } from "../fallback.ts";
-import { percentile, summarizeByRole, suggestThresholds, summarize, timeoutWarnings } from "../latency-stats.ts";
+import { BUILT_IN_COOLDOWN_POLICY, runFallbackChain, type AttemptLatencySample, type TimerApi } from "../src/fallback/index.ts";
+import { percentile, summarizeByRole, suggestThresholds, summarize, timeoutWarnings } from "../src/latency/stats.ts";
 
 type Event = { type: "start" | "thinking_delta" | "text_start" | "done" | "error"; reason?: "error" | "aborted" };
 type TimerEntry = { ms: number; callback: () => void; cleared: boolean };

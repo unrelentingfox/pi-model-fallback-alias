@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BUILT_IN_COOLDOWN_POLICY, createCooldownRegistry, parseAliasConfig, runFallbackChain, type AliasPolicy, type TimerApi } from "../fallback.ts";
+import { BUILT_IN_COOLDOWN_POLICY, createCooldownRegistry, parseAliasConfig, runFallbackChain, type AliasPolicy, type TimerApi } from "../src/fallback/index.ts";
 
 function policyWith(timeouts: object): AliasPolicy {
 	return { timeouts, cooldown: BUILT_IN_COOLDOWN_POLICY };

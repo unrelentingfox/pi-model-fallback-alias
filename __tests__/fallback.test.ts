@@ -5,7 +5,7 @@ import {
 	API_REGISTRY_SOURCE_ID,
 	API_REGISTRY_UNAVAILABLE_WARNING,
 	registerAliasApiProvider,
-} from "../api-registration.ts";
+} from "../src/alias/api-registration.ts";
 import {
 	BUILT_IN_COOLDOWN_POLICY,
 	COOLDOWN_BASE_MS,
@@ -18,7 +18,7 @@ import {
 	resolveFirstTarget,
 	resolveTargetReference,
 	runFallbackChain,
-} from "../fallback.ts";
+} from "../src/fallback/index.ts";
 
 type FakeEvent =
 	| { type: "start"; partial?: string }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSharedCooldownRegistry } from "../cooldown-store.ts";
-import { COOLDOWN_BASE_MS } from "../fallback.ts";
+import { createSharedCooldownRegistry } from "../src/cooldown-store.ts";
+import { COOLDOWN_BASE_MS } from "../src/fallback/index.ts";
 
 const STATE_PATH = "/fake/logs/cooldown-state.json";
 

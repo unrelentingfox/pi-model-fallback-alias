@@ -1,14 +1,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import type { DebugLog } from "./debug-log.ts";
-import type { PolicyWarning } from "./alias-config.ts";
+import type { DebugLog } from "../debug-log.ts";
+import type { PolicyWarning } from "../alias-config.ts";
 import {
 	describeFailure,
 	type AliasExpansionWarning,
 	type AliasSettingWarning,
 	type FailoverEntryData,
-} from "./fallback.ts";
-import { formatLatencyReportEntry, type LatencyReportEntryData } from "./latency-report.ts";
+} from "../fallback/index.ts";
+import { formatLatencyReportEntry, type LatencyReportEntryData } from "../latency/report.ts";
 import type { AliasSession } from "./session-status.ts";
 import { finiteNumber, formatDuration, formatFailoverWarning } from "./status.ts";
 

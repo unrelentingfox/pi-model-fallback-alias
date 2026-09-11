@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ALIAS_GATE_API_KEY, createAliasAuth } from "../auth-gate.ts";
+import { ALIAS_GATE_API_KEY, createAliasAuth } from "../src/alias/auth-gate.ts";
 
 const MAP_PATH = "/tmp/model-alias.json";
 

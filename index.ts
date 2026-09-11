@@ -1,16 +1,16 @@
 import { createProvider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MAP_PATH, createPolicyLoader, loadAliasConfig } from "./alias-config.ts";
-import { aliasModel, initializeAliasMetadata } from "./alias-model.ts";
-import { createAliasStreams } from "./alias-stream.ts";
-import { registerAliasApiProvider } from "./api-registration.ts";
-import { createAliasAuth } from "./auth-gate.ts";
-import { createSharedCooldownRegistry } from "./cooldown-store.ts";
-import { createDebugLog } from "./debug-log.ts";
-import { describeFailure } from "./fallback.ts";
-import { EXTENSION_LATENCY_LOG_PATH, expandLogPaths, readLatencyLog } from "./latency-log.ts";
-import { createLatencyReport, createLatencyReportEntry } from "./latency-report.ts";
-import { renderStatusTick, startSession, type AliasSession as StatusSession } from "./session-status.ts";
+import { MAP_PATH, createPolicyLoader, loadAliasConfig } from "./src/alias-config.ts";
+import { aliasModel, initializeAliasMetadata } from "./src/alias/alias-model.ts";
+import { createAliasStreams } from "./src/stream/alias-stream.ts";
+import { registerAliasApiProvider } from "./src/alias/api-registration.ts";
+import { createAliasAuth } from "./src/alias/auth-gate.ts";
+import { createSharedCooldownRegistry } from "./src/cooldown-store.ts";
+import { createDebugLog } from "./src/debug-log.ts";
+import { describeFailure } from "./src/fallback/index.ts";
+import { EXTENSION_LATENCY_LOG_PATH, expandLogPaths, readLatencyLog } from "./src/latency/log.ts";
+import { createLatencyReport, createLatencyReportEntry } from "./src/latency/report.ts";
+import { renderStatusTick, startSession, type AliasSession as StatusSession } from "./src/status/session-status.ts";
 import {
 	appendConfigWarningEntry,
 	appendFailoverEntry,
@@ -23,10 +23,10 @@ import {
 	formatSettingWarning,
 	registerTranscriptRenderers,
 	reportFailover,
-} from "./transcript.ts";
+} from "./src/status/transcript.ts";
 
-export { renderStatusTick, startSession } from "./session-status.ts";
-export type { AliasSessionContext, RenderStatusTickOptions } from "./session-status.ts";
+export { renderStatusTick, startSession } from "./src/status/session-status.ts";
+export type { AliasSessionContext, RenderStatusTickOptions } from "./src/status/session-status.ts";
 
 const PROVIDER_ID = "alias";
 const DEBUG_LOG = createDebugLog();

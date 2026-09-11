@@ -6,7 +6,7 @@ import {
 	formatDuration,
 	formatFailoverWarning,
 	formatFooterStatus,
-} from "../status.ts";
+} from "../src/status/status.ts";
 
 test("formats a model-only footer", () => {
 	assert.equal(formatFooterStatus("provider/sol", []), "provider/sol");

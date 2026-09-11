@@ -7,8 +7,8 @@ import {
 	type MetricSummary,
 	type RoleSummary,
 	type RoleTargetSummary,
-} from "./latency-stats.ts";
-import type { LatencyLogReport } from "./latency-log.ts";
+} from "./stats.ts";
+import type { LatencyLogReport } from "./log.ts";
 
 export interface LatencyReport {
 	samples: LatencyLogReport["samples"];

@@ -13,9 +13,9 @@ import {
 	type StreamOptions,
 } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { PolicyLoad } from "./alias-config.ts";
-import { mirrorTargetMetadata, targetsFor, ZERO_COST } from "./alias-model.ts";
-import type { DebugLog } from "./debug-log.ts";
+import type { PolicyLoad } from "../alias-config.ts";
+import { mirrorTargetMetadata, targetsFor, ZERO_COST } from "../alias/alias-model.ts";
+import type { DebugLog } from "../debug-log.ts";
 import {
 	describeFailure,
 	failureStopReason,
@@ -23,10 +23,10 @@ import {
 	type AliasMap,
 	type CooldownRegistry,
 	type FailoverEntryData,
-} from "./fallback.ts";
+} from "../fallback/index.ts";
 import { requestOptions, type ResolvedTargetAuth } from "./request-options.ts";
-import type { ProviderResponseMetadata } from "./latency-stats.ts";
-import type { AliasSession } from "./session-status.ts";
+import type { ProviderResponseMetadata } from "../latency/stats.ts";
+import type { AliasSession } from "../status/session-status.ts";
 import { resolveAuthenticatedTarget } from "./target-auth.ts";
 
 type Registry = ExtensionContext["modelRegistry"];
