@@ -1,6 +1,6 @@
 import type { TimeoutKind } from "../latency/stats.ts";
 import { BUILT_IN_COOLDOWN_POLICY, createCooldownRegistry } from "./cooldown.ts";
-import { describeFailure, failureStopReason, formatExhaustionError } from "./refs.ts";
+import { describeFailure, failureStopReason, formatExhaustionError, isRecord } from "./refs.ts";
 import type {
 	AttemptLatencyOutcome,
 	AttemptLatencySample,
@@ -391,8 +391,4 @@ function isAbortedTerminal(event: StreamEventLike): boolean {
 
 function failureEventReason(event: StreamEventLike): string {
 	return event.error?.errorMessage || "provider returned an error";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
