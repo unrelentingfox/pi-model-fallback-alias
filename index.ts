@@ -152,7 +152,6 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	pi.on("model_select", (event, ctx) => {
 		session.model = event.model;
 		if (!ctx.hasUI) return;
-		lastPushedText = undefined;
 		publishStatus();
 	});
 
