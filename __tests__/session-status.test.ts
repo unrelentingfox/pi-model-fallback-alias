@@ -185,6 +185,41 @@ describe("renderStatusTick", () => {
 		assert.equal(text, "provider/primary · cooldown: provider/primary 1m, provider/secondary 1m");
 	});
 
+	it("removes only the current model status when a non-alias model is selected", () => {
+		const session = createSession();
+		const captured = createUi();
+		startSession(session, createContext(true, captured.ui, {}), NOOP_DEBUG_LOG);
+		session.model = { provider: "alias", id: "fast" };
+		const aliases = new Map([["fast", ["provider/primary"]]]);
+		const cooldowns = { state: () => ({ failCount: 1, nextRetryAt: 61_000 }) };
+
+		const aliasText = renderStatusTick({
+			aliases,
+			session,
+			lastPushedText: undefined,
+			now: 1_000,
+			cooldowns,
+			debugLog: NOOP_DEBUG_LOG,
+		});
+		session.model = { provider: "provider", id: "fast" };
+		const nonAliasText = renderStatusTick({
+			aliases,
+			session,
+			lastPushedText: aliasText,
+			now: 1_000,
+			cooldowns,
+			debugLog: NOOP_DEBUG_LOG,
+		});
+
+		assert.equal(aliasText, "provider/primary · cooldown: provider/primary 1m");
+		assert.equal(nonAliasText, "cooldown: provider/primary 1m");
+		assert.deepEqual(captured.statuses, [
+			undefined,
+			"provider/primary · cooldown: provider/primary 1m",
+			"cooldown: provider/primary 1m",
+		]);
+	});
+
 	it("omits the model segment for a non-alias session model", () => {
 		const session = createSession();
 		const captured = createUi();
