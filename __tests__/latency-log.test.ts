@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createLatencyReport, createLatencyReportEntry, formatLatencyReportEntry } from "../latency-report.ts";
-import { expandLogPaths, readLatencyLog } from "../latency-log.ts";
+import { createLatencyReport, createLatencyReportEntry, formatLatencyReportEntry } from "../src/latency/report.ts";
+import { expandLogPaths, readLatencyLog } from "../src/latency/log.ts";
 
 const completeSample = {
 	role: "coder",

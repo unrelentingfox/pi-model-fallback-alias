@@ -1,4 +1,4 @@
-import { resolveTargetReference, type TargetRegistry } from "./fallback.ts";
+import { resolveTargetReference, type TargetRegistry } from "../fallback/index.ts";
 import type { ResolvedTargetAuth } from "./request-options.ts";
 
 export interface TargetAuthRegistry<Model, Provider> extends TargetRegistry<Model, Provider> {

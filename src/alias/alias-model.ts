@@ -5,7 +5,7 @@ import {
 	describeFailure,
 	resolveFirstTarget,
 	type AliasMap,
-} from "./fallback.ts";
+} from "../fallback/index.ts";
 
 const PLACEHOLDER_CONTEXT_WINDOW = 1_000_000;
 const PLACEHOLDER_MAX_TOKENS = 262_144;

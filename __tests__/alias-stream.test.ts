@@ -9,8 +9,8 @@ import type {
 	ProviderResponse,
 	StreamOptions,
 } from "@earendil-works/pi-ai";
-import { createAliasStreams } from "../alias-stream.ts";
-import { BUILT_IN_COOLDOWN_POLICY, createCooldownRegistry, type AliasPolicy } from "../fallback.ts";
+import { createAliasStreams } from "../src/stream/alias-stream.ts";
+import { BUILT_IN_COOLDOWN_POLICY, createCooldownRegistry, type AliasPolicy } from "../src/fallback/index.ts";
 
 test("rewrites partial and done identities without mutating target messages", async () => {
 	const partial = targetMessage({ responseModel: "reported-model" });
