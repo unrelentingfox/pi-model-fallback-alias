@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPolicyLoader, readAliasConfig } from "../alias-config.ts";
+import { createPolicyLoader, readAliasConfig } from "../src/alias-config.ts";
 import {
 	BUILT_IN_COOLDOWN_POLICY,
 	DEFAULT_STATUS_REFRESH_MS,
 	MAX_STATUS_REFRESH_MS,
 	parseAliasConfig,
 	type AliasConfig,
-} from "../fallback.ts";
+} from "../src/fallback/index.ts";
 
 const PATH = "/fake/model-alias.json";
 

@@ -7,7 +7,7 @@ import {
 	formatSettingWarning,
 	POLICY_WARNING_ENTRY,
 	SETTING_WARNING_ENTRY,
-} from "../transcript.ts";
+} from "../src/status/transcript.ts";
 
 const warning = { role: "gpt", reason: "Unexpected end of JSON input" };
 

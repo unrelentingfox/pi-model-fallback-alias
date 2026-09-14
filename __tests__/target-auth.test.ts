@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveAuthenticatedTarget, type TargetAuthRegistry } from "../target-auth.ts";
+import { resolveAuthenticatedTarget, type TargetAuthRegistry } from "../src/stream/target-auth.ts";
 
 type FakeModel = { ref: string };
 type FakeProvider = { id: string };

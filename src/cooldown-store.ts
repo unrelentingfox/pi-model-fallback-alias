@@ -12,7 +12,7 @@ import {
 	type CooldownPolicy,
 	type CooldownRegistry,
 	type CooldownState,
-} from "./fallback.ts";
+} from "./fallback/index.ts";
 import { STATE_DIR } from "./state-paths.ts";
 
 const STATE_NAME = "cooldown-state.json";

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { StreamOptions } from "@earendil-works/pi-ai";
-import { ALIAS_GATE_API_KEY } from "../auth-gate.ts";
-import { requestOptions } from "../request-options.ts";
+import { ALIAS_GATE_API_KEY } from "../src/alias/auth-gate.ts";
+import { requestOptions } from "../src/stream/request-options.ts";
 
 test("never forwards the alias gate when the target auth has no key", () => {
 	const options = requestOptions({ apiKey: ALIAS_GATE_API_KEY }, {}, undefined);

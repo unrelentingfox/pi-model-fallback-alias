@@ -1,5 +1,5 @@
-import type { DebugLog } from "./debug-log.ts";
-import { describeFailure, type AliasMap, type CooldownRegistry } from "./fallback.ts";
+import type { DebugLog } from "../debug-log.ts";
+import { describeFailure, type AliasMap, type CooldownRegistry } from "../fallback/index.ts";
 import {
 	composeFooterStatus,
 	formatCooldownStatus,

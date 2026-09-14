@@ -9,7 +9,7 @@ import {
 	parseAliasConfig,
 	type AliasConfig,
 	type AliasPolicy,
-} from "./fallback.ts";
+} from "./fallback/index.ts";
 
 const DEFAULT_MAP_PATH = join(getAgentDir(), "model-alias.json");
 export const MAP_PATH = process.env.PI_MODEL_ALIAS_MAP || DEFAULT_MAP_PATH;

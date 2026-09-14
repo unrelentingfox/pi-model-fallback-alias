@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveTimestamp, createDebugLog, MAX_BYTES_ENV, RETENTION_DAYS_ENV } from "../debug-log.ts";
+import { archiveTimestamp, createDebugLog, MAX_BYTES_ENV, RETENTION_DAYS_ENV } from "../src/debug-log.ts";
 
 const FIXED_DATE = new Date("2026-03-20T12:34:56.000Z");
 const ARCHIVE_SUFFIX = `2026-03-20T12-34-56-000Z.${process.pid}.1.jsonl`;

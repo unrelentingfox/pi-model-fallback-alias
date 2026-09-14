@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { DEFAULT_LATENCY_LOG_PATH, expandLogPaths, readLatencyLog } from "../latency-log.ts";
-import { createLatencyReport, formatCliLatencyReport } from "../latency-report.ts";
+import { DEFAULT_LATENCY_LOG_PATH, expandLogPaths, readLatencyLog } from "../src/latency/log.ts";
+import { createLatencyReport, formatCliLatencyReport } from "../src/latency/report.ts";
 
 const inputPaths = process.argv.slice(2);
 const log = readLatencyLog(expandLogPaths(inputPaths.length === 0 ? [DEFAULT_LATENCY_LOG_PATH] : inputPaths));

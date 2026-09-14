@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { archiveTimestampFor } from "./debug-log.ts";
-import { type LatencySample, TIMEOUT_KINDS, type TimeoutKind } from "./latency-stats.ts";
-import { STATE_DIR } from "./state-paths.ts";
+import { archiveTimestampFor } from "../debug-log.ts";
+import { type LatencySample, TIMEOUT_KINDS, type TimeoutKind } from "./stats.ts";
+import { STATE_DIR } from "../state-paths.ts";
 
 export interface LegacyTimeout {
 	role: string;
