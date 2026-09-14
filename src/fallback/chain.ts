@@ -48,9 +48,7 @@ const DEFAULT_TIMERS: TimerApi = {
 
 export async function runFallbackChain<Event extends StreamEventLike>(options: FallbackOptions<Event>): Promise<void> {
 	if (options.targets.length === 0) {
-		throw new Error(
-			`Model alias "${options.role}" has no usable targets (all skipped during config expansion — see model-alias config warnings)`,
-		);
+		throw new Error(`Model alias "${options.role}" has no usable targets after config expansion`);
 	}
 	const cooldowns = options.cooldowns ?? createCooldownRegistry();
 	if (options.targets.length === 1) {

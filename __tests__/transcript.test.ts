@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	ALIAS_TARGETS_ENTRY,
+	appendAliasTargetsEntry,
 	appendPolicyWarningEntry,
 	appendSettingWarningEntry,
+	createAliasTargetsEntry,
+	formatAliasTargetsEntry,
 	formatPolicyWarning,
 	formatSettingWarning,
 	POLICY_WARNING_ENTRY,
@@ -10,6 +14,38 @@ import {
 } from "../src/status/transcript.ts";
 
 const warning = { role: "gpt", reason: "Unexpected end of JSON input" };
+
+test("formats all flattened alias chains", () => {
+	const data = createAliasTargetsEntry(new Map([
+		["coder", ["provider/one", "provider/two"]],
+		["empty", []],
+	]));
+
+	assert.equal(
+		formatAliasTargetsEntry(data),
+		"coder:\n  - provider/one\n  - provider/two\n\nempty:\n  (empty)",
+	);
+});
+
+test("formats a selected flattened alias chain", () => {
+	const aliases = new Map([["coder", ["provider/one"]]]);
+	assert.deepEqual(createAliasTargetsEntry(aliases, "coder"), {
+		role: "coder",
+		chains: [{ role: "coder", targets: ["provider/one"] }],
+	});
+	assert.equal(formatAliasTargetsEntry(createAliasTargetsEntry(aliases, "missing")), 'Unknown alias "missing"');
+});
+
+test("appends flattened chains as a durable custom entry", () => {
+	const entries: Array<{ type: string; data: unknown }> = [];
+	const data = createAliasTargetsEntry(new Map([["coder", ["provider/one"]]]));
+	appendAliasTargetsEntry(
+		{ appendEntry: (type: string, entryData: unknown) => entries.push({ type, data: entryData }) } as never,
+		data,
+	);
+
+	assert.deepEqual(entries, [{ type: ALIAS_TARGETS_ENTRY, data }]);
+});
 
 test("formats a durable policy warning without config values", () => {
 	assert.equal(

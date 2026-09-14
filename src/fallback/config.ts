@@ -12,9 +12,6 @@ import type {
 
 export const BUILT_IN_POLICY: AliasPolicy = { cooldown: BUILT_IN_COOLDOWN_POLICY };
 
-/** Nested-alias refs deeper than this are skipped with a warning; deeper nesting is almost certainly a config mistake. */
-export const MAX_ALIAS_DEPTH = 4;
-
 export function parseAliasConfig(value: unknown): AliasConfig {
 	if (!isRecord(value)) throw new Error("expected a JSON object");
 
@@ -197,10 +194,7 @@ function expandNestedAliases(aliases: Map<string, readonly string[]>): ExpandedA
 	return { aliases: expandedAliases, warnings: [...warnings.values()] };
 }
 
-// Deliberately unmemoized: the depth cap makes an expansion path-dependent, so a
-// reused result would let declaration order decide whether a deep ref is skipped.
-// Alias maps are tiny (a handful of roles, depth ≤ MAX_ALIAS_DEPTH), so each
-// top-level role re-expands with its own true path depth.
+// Deliberately unmemoized so each top-level role preserves its own traversal order.
 function expandAlias(
 	role: string,
 	aliases: Map<string, readonly string[]>,
@@ -215,9 +209,9 @@ function expandAlias(
 			appendUnique(expandedTargets, seenTargets, target);
 			continue;
 		}
-		const skipReason = nestedSkipReason(role, nestedRole, aliases, path);
-		if (skipReason) {
-			recordWarning(warnings, { role, target, reason: skipReason });
+		if (nestedRole === role || path.includes(nestedRole)) continue;
+		if (!aliases.has(nestedRole)) {
+			recordWarning(warnings, { role, target, reason: `unknown alias target "alias/${nestedRole}"` });
 			continue;
 		}
 		for (const nestedTarget of expandAlias(nestedRole, aliases, [...path, role], warnings)) {
@@ -225,21 +219,6 @@ function expandAlias(
 		}
 	}
 	return expandedTargets;
-}
-
-function nestedSkipReason(
-	role: string,
-	nestedRole: string,
-	aliases: Map<string, readonly string[]>,
-	path: readonly string[],
-): string | undefined {
-	if (!aliases.has(nestedRole)) return `unknown alias target "alias/${nestedRole}"`;
-	if (nestedRole === role || path.includes(nestedRole)) {
-		const chain = [...path, role, nestedRole];
-		return `alias cycle ${chain.slice(chain.indexOf(nestedRole)).join(" -> ")}`;
-	}
-	if (path.length + 1 > MAX_ALIAS_DEPTH) return `alias nesting deeper than ${MAX_ALIAS_DEPTH} levels`;
-	return undefined;
 }
 
 function recordWarning(warnings: Map<string, AliasExpansionWarning>, warning: AliasExpansionWarning): void {

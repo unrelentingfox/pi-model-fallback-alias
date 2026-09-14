@@ -31,7 +31,7 @@ export {
 	nextCooldown,
 } from "./cooldown.ts";
 
-export { BUILT_IN_POLICY, MAX_ALIAS_DEPTH, parseAliasConfig } from "./config.ts";
+export { BUILT_IN_POLICY, parseAliasConfig } from "./config.ts";
 
 export {
 	describeFailure,

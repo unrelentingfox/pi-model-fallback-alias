@@ -13,7 +13,6 @@ import {
 	createCooldownRegistry,
 	failureStopReason,
 	formatExhaustionError,
-	MAX_ALIAS_DEPTH,
 	parseAliasConfig,
 	resolveFirstTarget,
 	resolveTargetReference,
@@ -142,36 +141,38 @@ test("deduplicates concrete targets in a flat chain", () => {
 	assert.deepEqual(aliases.get("top"), ["p/1", "p/2"]);
 });
 
-test("skips a self-referencing alias cycle and warns", () => {
+test("collapses a self-referencing alias loop without warning", () => {
 	const config = parseAliasConfig({ "coder-model": ["provider/model", "alias/coder-model"] });
 	assert.deepEqual(config.aliases.get("coder-model"), ["provider/model"]);
-	assert.deepEqual(config.warnings, [
-		{ role: "coder-model", target: "alias/coder-model", reason: "alias cycle coder-model -> coder-model" },
-	]);
+	assert.deepEqual(config.warnings, []);
 });
 
-test("skips a mutual alias cycle in both directions and keeps concrete targets", () => {
-	const config = parseAliasConfig({ a: ["p/1", "alias/b"], b: ["p/2", "alias/a"] });
-	assert.deepEqual(config.aliases.get("a"), ["p/1", "p/2"]);
-	assert.deepEqual(config.aliases.get("b"), ["p/2", "p/1"]);
-	assert.deepEqual(config.warnings, [
-		{ role: "b", target: "alias/a", reason: "alias cycle a -> b -> a" },
-		{ role: "a", target: "alias/b", reason: "alias cycle b -> a -> b" },
-	]);
+test("collapses a pure self-loop to an empty chain without warning", () => {
+	const config = parseAliasConfig({ a: "alias/a" });
+	assert.deepEqual(config.aliases.get("a"), []);
+	assert.deepEqual(config.warnings, []);
 });
 
-test("attributes a nested cycle to the role that owns the cyclic ref", () => {
+test("collapses a mutual alias loop to unique concrete targets", () => {
+	const config = parseAliasConfig({
+		a: ["p/1", "alias/b", "p/2"],
+		b: ["p/2", "alias/a", "p/3"],
+	});
+	assert.deepEqual(config.aliases.get("a"), ["p/1", "p/2", "p/3"]);
+	assert.deepEqual(config.aliases.get("b"), ["p/2", "p/1", "p/3"]);
+	assert.deepEqual(config.warnings, []);
+});
+
+test("collapses a nested alias loop without warning", () => {
 	const config = parseAliasConfig({
 		r: "alias/x",
 		x: ["p/9", "alias/y"],
 		y: "alias/z",
-		z: "alias/x",
+		z: ["alias/x", "p/10"],
 	});
-	assert.deepEqual(config.aliases.get("r"), ["p/9"]);
-	assert.deepEqual(config.aliases.get("x"), ["p/9"]);
-	assert.ok(config.warnings.some(
-		(warning) => warning.role === "z" && warning.target === "alias/x" && warning.reason === "alias cycle x -> y -> z -> x",
-	));
+	assert.deepEqual(config.aliases.get("r"), ["p/9", "p/10"]);
+	assert.deepEqual(config.aliases.get("x"), ["p/9", "p/10"]);
+	assert.deepEqual(config.warnings, []);
 });
 
 test("skips an unknown nested alias and warns, keeping the role with an empty chain", () => {
@@ -190,31 +191,29 @@ test("attributes a deeply nested unknown alias to its immediate role", () => {
 	]);
 });
 
-test("skips alias refs nested deeper than MAX_ALIAS_DEPTH and warns", () => {
+test("expands deeply nested aliases without a depth limit", () => {
 	const config = parseAliasConfig({
 		r0: "alias/r1",
 		r1: "alias/r2",
 		r2: "alias/r3",
 		r3: "alias/r4",
-		r4: ["p/deep", "alias/r5"],
-		r5: "p/deepest",
+		r4: "alias/r5",
+		r5: "alias/r6",
+		r6: "p/deepest",
 	});
-	assert.deepEqual(config.aliases.get("r0"), ["p/deep"]);
-	// One level shallower, the same chain resolves in full.
-	assert.deepEqual(config.aliases.get("r1"), ["p/deep", "p/deepest"]);
-	assert.deepEqual(config.warnings, [
-		{ role: "r4", target: "alias/r5", reason: `alias nesting deeper than ${MAX_ALIAS_DEPTH} levels` },
-	]);
+	assert.deepEqual(config.aliases.get("r0"), ["p/deepest"]);
+	assert.deepEqual(config.warnings, []);
 });
 
-test("depth-cap expansion is declaration-order independent", () => {
+test("deep expansion is declaration-order independent", () => {
 	const deep = {
 		r0: "alias/r1",
 		r1: "alias/r2",
 		r2: "alias/r3",
 		r3: "alias/r4",
-		r4: ["p/deep", "alias/r5"],
-		r5: "p/deepest",
+		r4: "alias/r5",
+		r5: "alias/r6",
+		r6: "p/deepest",
 	};
 	const first = parseAliasConfig(deep);
 	const second = parseAliasConfig(Object.fromEntries(Object.entries(deep).reverse()));
@@ -222,15 +221,14 @@ test("depth-cap expansion is declaration-order independent", () => {
 	for (const role of Object.keys(deep)) {
 		assert.deepEqual(second.aliases.get(role), first.aliases.get(role), `chain for "${role}" depends on declaration order`);
 	}
-	const byRole = (left: { role: string }, right: { role: string }) => left.role.localeCompare(right.role);
-	assert.deepEqual([...second.warnings].sort(byRole), [...first.warnings].sort(byRole));
+	assert.deepEqual(second.warnings, first.warnings);
 });
 
-test("expands a pure mutual cycle to empty chains without throwing", () => {
+test("expands a pure mutual loop to empty chains without throwing or warning", () => {
 	const config = parseAliasConfig({ a: ["alias/b"], b: ["alias/a"] });
 	assert.deepEqual(config.aliases.get("a"), []);
 	assert.deepEqual(config.aliases.get("b"), []);
-	assert.equal(config.warnings.length, 2);
+	assert.deepEqual(config.warnings, []);
 });
 
 test("parses a clean config with no warnings", () => {
@@ -865,7 +863,7 @@ test("formats every failure when all targets are exhausted", async () => {
 	);
 });
 
-test("points at config warnings when the expanded chain is empty", async () => {
+test("reports an unusable expanded chain", async () => {
 	await assert.rejects(
 		runFallbackChain({
 			role: "empty",
@@ -876,8 +874,7 @@ test("points at config warnings when the expanded chain is empty", async () => {
 		}),
 		(error) =>
 			error instanceof Error &&
-			error.message ===
-				'Model alias "empty" has no usable targets (all skipped during config expansion — see model-alias config warnings)',
+			error.message === 'Model alias "empty" has no usable targets after config expansion',
 	);
 });
 
