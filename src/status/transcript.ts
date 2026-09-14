@@ -5,6 +5,7 @@ import type { PolicyWarning } from "../alias-config.ts";
 import {
 	describeFailure,
 	type AliasExpansionWarning,
+	type AliasMap,
 	type AliasSettingWarning,
 	type FailoverEntryData,
 } from "../fallback/index.ts";
@@ -15,9 +16,37 @@ import { finiteNumber, formatDuration, formatFailoverWarning } from "./status.ts
 export const FAILOVER_ENTRY = "model-alias-failover";
 export const RESET_ENTRY = "model-alias-reset";
 export const LATENCY_REPORT_ENTRY = "model-alias-latency-report";
+export const ALIAS_TARGETS_ENTRY = "model-alias-targets";
 export const CONFIG_WARNING_ENTRY = "model-alias-config-warning";
 export const SETTING_WARNING_ENTRY = "model-alias-setting-warning";
 export const POLICY_WARNING_ENTRY = "model-alias-policy-warning";
+
+export interface AliasTargetsEntryData {
+	role?: string;
+	chains: readonly { role: string; targets: readonly string[] }[];
+}
+
+export function createAliasTargetsEntry(aliases: AliasMap, role?: string): AliasTargetsEntryData {
+	const roles = role ? [role] : [...aliases.keys()];
+	return {
+		...(role ? { role } : {}),
+		chains: roles.flatMap((aliasRole) => {
+			const targets = aliases.get(aliasRole);
+			return targets ? [{ role: aliasRole, targets }] : [];
+		}),
+	};
+}
+
+export function formatAliasTargetsEntry(data: AliasTargetsEntryData): string {
+	if (data.chains.length === 0) return data.role ? `Unknown alias "${data.role}"` : "No aliases configured";
+	return data.chains
+		.map(({ role, targets }) => `${role}:\n${targets.length > 0 ? targets.map((target) => `  - ${target}`).join("\n") : "  (empty)"}`)
+		.join("\n\n");
+}
+
+export function appendAliasTargetsEntry(pi: ExtensionAPI, data: AliasTargetsEntryData): void {
+	pi.appendEntry(ALIAS_TARGETS_ENTRY, data);
+}
 
 export function formatConfigWarning(data: AliasExpansionWarning): string {
 	return `Alias "${data.role}" skipped target "${data.target}": ${data.reason}`;
@@ -90,6 +119,14 @@ export function registerTranscriptRenderers(pi: ExtensionAPI): void {
 	pi.registerEntryRenderer<{ clearedCount?: number }>(RESET_ENTRY, (entry, _opts, theme) => {
 		const clearedCount = finiteNumber(entry.data?.clearedCount);
 		return new Text(theme.fg("dim", `[model-alias] Cleared ${clearedCount} model cooldown(s)`), 0, 0);
+	});
+	pi.registerEntryRenderer<Partial<AliasTargetsEntryData>>(ALIAS_TARGETS_ENTRY, (entry, _opts, theme) => {
+		const data = entry.data;
+		const chains = data?.chains ?? [];
+		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+		box.addChild(new Text(theme.fg("dim", "[model-alias] Flattened targets"), 0, 0));
+		box.addChild(new Text(formatAliasTargetsEntry({ ...(data?.role ? { role: data.role } : {}), chains }), 0, 0));
+		return box;
 	});
 	pi.registerEntryRenderer<Partial<LatencyReportEntryData>>(LATENCY_REPORT_ENTRY, (entry, { expanded }, theme) => {
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));

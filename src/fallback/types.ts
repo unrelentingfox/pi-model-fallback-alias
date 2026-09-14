@@ -44,7 +44,7 @@ export interface AliasConfig {
 	settingWarnings: readonly AliasSettingWarning[];
 }
 
-/** A nested-alias ref skipped during expansion (cycle, unknown alias, or depth cap). */
+/** A nested-alias reference skipped because its target is unknown. */
 export interface AliasExpansionWarning {
 	role: string;
 	target: string;

@@ -12,12 +12,14 @@ import { EXTENSION_LATENCY_LOG_PATH, expandLogPaths, readLatencyLog } from "./sr
 import { createLatencyReport, createLatencyReportEntry } from "./src/latency/report.ts";
 import { renderStatusTick, startSession, type AliasSession as StatusSession } from "./src/status/session-status.ts";
 import {
+	appendAliasTargetsEntry,
 	appendConfigWarningEntry,
 	appendFailoverEntry,
 	appendLatencyReportEntry,
 	appendPolicyWarningEntry,
 	appendResetEntry,
 	appendSettingWarningEntry,
+	createAliasTargetsEntry,
 	formatConfigWarning,
 	formatPolicyWarning,
 	formatSettingWarning,
@@ -155,7 +157,7 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 		publishStatus();
 	});
 
-	pi.registerCommand("reset-model-cooldown", {
+	pi.registerCommand("model-alias-reset-cooldown", {
 		description: "Clear all model-alias target cooldowns",
 		handler: async () => {
 			const clearedCount = TARGET_COOLDOWNS.clearAll();
@@ -164,7 +166,18 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerCommand("alias-latency-report", {
+	pi.registerCommand("model-alias-targets", {
+		description: "Show fully flattened model-alias chains",
+		getArgumentCompletions: (prefix) => [...aliases.keys()]
+			.filter((role) => role.startsWith(prefix))
+			.map((role) => ({ value: role, label: role })),
+		handler: async (args) => {
+			const role = args.trim() || undefined;
+			appendAliasTargetsEntry(pi, createAliasTargetsEntry(aliases, role));
+		},
+	});
+
+	pi.registerCommand("model-alias-latency-report", {
 		description: "Show model-alias attempt latency statistics",
 		getArgumentCompletions: (prefix) => [...aliases.keys()]
 			.filter((role) => role.startsWith(prefix))

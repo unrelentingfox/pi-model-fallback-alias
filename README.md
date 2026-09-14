@@ -53,10 +53,11 @@ cooldown state; it defaults to 2000 milliseconds and accepts values up to 60000
 milliseconds. Invalid settings warn and use the default without disabling aliases. Settings are extension-wide and take
 effect after `/reload`. Model and target changes still refresh the footer
 immediately.
-Nested aliases are flattened at load time. Cycles, missing aliases, and nesting
-deeper than four levels skip only the invalid reference and produce a warning.
-Duplicate concrete targets keep their first position. Other top-level keys prefixed
-with `$`, such as `$comment`, are treated as metadata and ignored.
+Nested aliases are flattened at load time. Loops are allowed and collapse during
+expansion. Duplicate concrete targets keep their first position in each flattened
+chain. A loop with no reachable concrete target produces an unusable empty chain.
+Missing aliases skip only the invalid reference and produce a warning. Other top-level
+keys prefixed with `$`, such as `$comment`, are treated as metadata and ignored.
 
 Use an alias anywhere Pi accepts a model reference:
 
@@ -83,8 +84,10 @@ Use an alias anywhere Pi accepts a model reference:
 - The alias model mirrors the selected target's context window, output limit,
   and cost. Assistant messages preserve the logical alias identity while
   `responseModel` records the concrete model.
-- `/reset-model-cooldown` clears shared cooldown state.
-- `/alias-latency-report [role]` renders attempt statistics in the transcript.
+- `/model-alias-reset-cooldown` clears shared cooldown state.
+- `/model-alias-targets [role]` renders all flattened fallback chains, or one selected
+  role, in the transcript.
+- `/model-alias-latency-report [role]` renders attempt statistics in the transcript.
 
 ## State and logs
 
@@ -132,7 +135,7 @@ reporting.
 - **Restored session cannot find an alias:** restore the role, select a current
   model, or start a new session.
 - **Footer looks stale:** verify `$settings.statusRefreshMs`, run `/reload`,
-  inspect transcript warnings, or run `/reset-model-cooldown`.
+  inspect transcript warnings, or run `/model-alias-reset-cooldown`.
 - **Policy edit is temporarily invalid:** existing aliases use their last valid
   policy and warn once per distinct failure. Replace configuration atomically
   to keep concurrent processes aligned.
