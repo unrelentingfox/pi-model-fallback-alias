@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/unrelentingfox/pi-model-fallback-alias/compare/v0.1.1...v0.2.0) (2026-09-15)
+
+
+### Features
+
+* allow loops in fallback aliases ([#21](https://github.com/unrelentingfox/pi-model-fallback-alias/issues/21)) ([f84a435](https://github.com/unrelentingfox/pi-model-fallback-alias/commit/f84a43536394341b37ae1cdf5f9dd12313c3751e))
+
+
+### Bug Fixes
+
+* clear non-alias model status ([#19](https://github.com/unrelentingfox/pi-model-fallback-alias/issues/19)) ([01780f9](https://github.com/unrelentingfox/pi-model-fallback-alias/commit/01780f911e27c3ecdb185c8fa39eb831b6ac5680))
+* retry missing npm releases ([bfde318](https://github.com/unrelentingfox/pi-model-fallback-alias/commit/bfde318a31f8e426ad08d31f1a94497dd62f9c0a))
+
 ## [0.1.1](https://github.com/unrelentingfox/pi-model-fallback-alias/compare/v0.1.0...v0.1.1) (2026-09-09)
 
 
