@@ -13,13 +13,16 @@ durable transcript warnings without owning target-provider credentials.
 
 ## Install
 
-Requires Node 22.19 or newer and is tested against Pi 0.84.4.
+Requires Node 22.19 or newer and Pi. Development and validation use
+`@earendil-works/pi-ai` 0.84.4, `@earendil-works/pi-coding-agent` 0.84.4,
+and `@earendil-works/pi-tui` 0.85.1.
 
 ```bash
 pi install npm:pi-model-fallback-alias
 ```
 
-Run `/reload` in a live session after installation or configuration changes.
+Run `/reload` in a live session after installation or changes to `$settings` or
+alias definitions, including target chains.
 
 ## Configuration
 
@@ -32,7 +35,11 @@ Aliases live in `<agent-dir>/model-alias.json`, normally
     "statusRefreshMs": 2000
   },
   "$defaults": {
-    "timeouts": { "firstEventMs": 30000, "stallMs": 60000 },
+    "timeouts": {
+      "firstEventMs": 30000,
+      "stallMs": 60000,
+      "commitMs": 90000
+    },
     "cooldown": { "baseMs": 300000, "capMs": 3600000, "resetSuccesses": 3 }
   },
   "coder": [
@@ -48,11 +55,27 @@ Aliases live in `<agent-dir>/model-alias.json`, normally
 
 Each key registers `alias/<key>` as a Pi model. A value can be a model string,
 an ordered array, or an object with `targets`, `timeouts`, and `cooldown`.
+
+`timeouts` applies while another target remains:
+
+- `firstEventMs` is the maximum wait for the first stream event.
+- `stallMs` is the maximum gap between pre-commit stream events.
+- `commitMs` is the maximum total time before output commits.
+
+`cooldown.baseMs` defaults to 5 minutes, `cooldown.capMs` defaults to 1 hour,
+and `cooldown.resetSuccesses` defaults to 1 successful terminal stream before
+clearing a target's cooldown state. `$defaults.cooldownResetSuccesses` is a
+legacy, defaults-only shorthand for `$defaults.cooldown.resetSuccesses`; set one
+or the other, not both.
+
 Set `$settings.statusRefreshMs` to control how often the footer rechecks shared
-cooldown state; it defaults to 2000 milliseconds and accepts values up to 60000
-milliseconds. Invalid settings warn and use the default without disabling aliases. Settings are extension-wide and take
-effect after `/reload`. Model and target changes still refresh the footer
-immediately.
+cooldown state. It defaults to 2000 milliseconds and must be an integer from 1
+to 60000. Invalid settings warn and use the default without disabling aliases.
+`$settings` and alias definitions, including target chains, load on `/reload`.
+Model selection and failover refresh the footer immediately. Timeout and cooldown
+policy fields are re-read at the start of each stream; if the current map is
+invalid, the alias uses its last valid policy and emits a warning.
+
 Nested aliases are flattened at load time. Loops are allowed and collapse during
 expansion. Duplicate concrete targets keep their first position in each flattened
 chain. A loop with no reachable concrete target produces an unusable empty chain.
@@ -107,6 +130,19 @@ The active log rotates after 1 MiB and retained archives expire after seven
 days. Configure positive integer overrides with
 `PI_MODEL_ALIAS_LOG_MAX_BYTES` and `PI_MODEL_ALIAS_LOG_RETENTION_DAYS`.
 
+From a checkout or local package directory, run the standalone report with:
+
+```bash
+node --import ./scripts/pi-resolve.mjs scripts/latency-report.mjs [log-path ...]
+```
+
+The loader in `scripts/pi-resolve.mjs` resolves Pi packages from `PI_ROOT`, local
+`node_modules`, or a global Pi install.
+
+With no arguments, the report reads the default debug log and its retained
+rotated files. Optional log paths replace the default and include each path's
+retained files.
+
 Logs contain alias roles, target references, durations, status codes, and
 allowlisted request or trace identifiers. They do not record authorization
 headers, cookies, request payloads, response bodies, alias configuration, or
@@ -147,12 +183,12 @@ reporting.
 
 ```bash
 npm ci
-npm test
-npm run typecheck
-npm run check:pack
+npm run check
 ```
 
-Tests use pinned Pi 0.84.4 development packages. Runtime Pi packages remain
+`npm run check` runs tests, type checking, and package validation. Development
+dependencies pin `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`
+to 0.84.4, and `@earendil-works/pi-tui` to 0.85.1. Runtime Pi packages remain
 optional wildcard peer dependencies because Pi supplies them when loading the
 extension. Continuous integration tests Node 22.19 and Node 24.
 
