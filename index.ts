@@ -6,8 +6,8 @@ import { createAliasStreams } from "./src/stream/alias-stream.ts";
 import { registerAliasApiProvider } from "./src/alias/api-registration.ts";
 import { createAliasAuth } from "./src/alias/auth-gate.ts";
 import { createSharedCooldownRegistry } from "./src/cooldown-store.ts";
-import { createDebugLog } from "./src/debug-log.ts";
-import { describeFailure } from "./src/fallback/index.ts";
+import { createDebugLog, type DebugLog } from "./src/debug-log.ts";
+import { describeFailure, type AliasConfig, type CooldownRegistry } from "./src/fallback/index.ts";
 import { EXTENSION_LATENCY_LOG_PATH, expandLogPaths, readLatencyLog } from "./src/latency/log.ts";
 import { createLatencyReport, createLatencyReportEntry } from "./src/latency/report.ts";
 import { renderStatusTick, startSession, type AliasSession as StatusSession } from "./src/status/session-status.ts";
@@ -37,12 +37,25 @@ const TARGET_COOLDOWNS = createSharedCooldownRegistry({ debugLog: DEBUG_LOG });
 type Registry = ExtensionContext["modelRegistry"];
 export type AliasSession = StatusSession<Registry, ExtensionContext["ui"]>;
 
+export interface PiModelAliasDependencies {
+	aliasConfig?: AliasConfig;
+	debugLog?: DebugLog;
+	cooldowns?: CooldownRegistry;
+	timers?: import("./src/fallback/types.ts").TimerApi;
+}
+
 export default function piModelAlias(pi: ExtensionAPI): void {
-	const aliasConfig = loadAliasConfig(DEBUG_LOG);
+	installPiModelAlias(pi);
+}
+
+export function installPiModelAlias(pi: ExtensionAPI, dependencies: PiModelAliasDependencies = {}): void {
+	const debugLog = dependencies.debugLog ?? DEBUG_LOG;
+	const targetCooldowns = dependencies.cooldowns ?? TARGET_COOLDOWNS;
+	const aliasConfig = dependencies.aliasConfig ?? loadAliasConfig(debugLog);
 	const { aliases } = aliasConfig;
 	let pendingConfigWarnings = [...aliasConfig.warnings];
 	let pendingSettingWarnings = [...aliasConfig.settingWarnings];
-	DEBUG_LOG.log("extension-load", { mapPath: MAP_PATH, aliases: [...aliases.keys()] });
+	debugLog.log("extension-load", { mapPath: MAP_PATH, aliases: [...aliases.keys()] });
 	if (aliases.size === 0) return;
 
 	const session: AliasSession = {
@@ -59,11 +72,11 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 				aliases,
 				session,
 				lastPushedText,
-				cooldowns: TARGET_COOLDOWNS,
-				debugLog: DEBUG_LOG,
+				cooldowns: targetCooldowns,
+				debugLog,
 			});
 		} catch (error) {
-			DEBUG_LOG.log("ui-error", { operation: "status-tick", message: describeFailure(error) });
+			debugLog.log("ui-error", { operation: "status-tick", message: describeFailure(error) });
 		}
 	};
 	let statusRefreshInterval: ReturnType<typeof setInterval> | undefined;
@@ -80,10 +93,10 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 
 	const aliasModels = [...aliases.keys()].map((id) => aliasModel(id, PROVIDER_ID));
 	const policyFor = createPolicyLoader({
-		debugLog: DEBUG_LOG,
+		debugLog,
 		initial: aliasConfig,
 		onWarning(warning) {
-			appendPolicyWarningEntry(pi, warning, DEBUG_LOG);
+			appendPolicyWarningEntry(pi, warning, debugLog);
 			if (!session.hasUI) console.warn(`[pi-model-alias] ${formatPolicyWarning(warning)}`);
 		},
 	});
@@ -92,15 +105,16 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 		policyFor,
 		aliasModels,
 		session,
-		cooldowns: TARGET_COOLDOWNS,
-		debugLog: DEBUG_LOG,
+		cooldowns: targetCooldowns,
+		debugLog,
+		timers: dependencies.timers,
 		onTargetSelected() {
 			publishStatus();
 		},
 		onFailover(data) {
 			if (data.nextTarget) session.activeTargets.set(data.role, data.nextTarget);
-			reportFailover(data, session, DEBUG_LOG);
-			appendFailoverEntry(pi, data, DEBUG_LOG);
+			reportFailover(data, session, debugLog);
+			appendFailoverEntry(pi, data, debugLog);
 			publishStatus();
 		},
 	});
@@ -119,7 +133,7 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (_event, ctx) => {
 		session.model = ctx.model;
-		if (startSession(session, ctx, DEBUG_LOG)) {
+		if (startSession(session, ctx, debugLog)) {
 			lastPushedText = undefined;
 			startStatusRefresh();
 			publishStatus();
@@ -129,9 +143,9 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 			const warnings = pendingSettingWarnings;
 			pendingSettingWarnings = [];
 			for (const warning of warnings) {
-				DEBUG_LOG.log("setting-warning", { ...warning });
+				debugLog.log("setting-warning", { ...warning });
 				if (!session.hasUI) console.warn(`[pi-model-alias] ${formatSettingWarning(warning)}`);
-				appendSettingWarningEntry(pi, warning, DEBUG_LOG);
+				appendSettingWarningEntry(pi, warning, debugLog);
 			}
 		}
 		// Config warnings render once, for the user only: custom transcript
@@ -140,9 +154,9 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 			const warnings = pendingConfigWarnings;
 			pendingConfigWarnings = [];
 			for (const warning of warnings) {
-				DEBUG_LOG.log("expand-warning", { ...warning });
+				debugLog.log("expand-warning", { ...warning });
 				if (!session.hasUI) console.warn(`[pi-model-alias] ${formatConfigWarning(warning)}`);
-				appendConfigWarningEntry(pi, warning, DEBUG_LOG);
+				appendConfigWarningEntry(pi, warning, debugLog);
 			}
 		}
 	});
@@ -160,7 +174,7 @@ export default function piModelAlias(pi: ExtensionAPI): void {
 	pi.registerCommand("model-alias-reset-cooldown", {
 		description: "Clear all model-alias target cooldowns",
 		handler: async () => {
-			const clearedCount = TARGET_COOLDOWNS.clearAll();
+			const clearedCount = targetCooldowns.clearAll();
 			publishStatus();
 			appendResetEntry(pi, clearedCount);
 		},

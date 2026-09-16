@@ -5,6 +5,7 @@ import {
 	appendAliasTargetsEntry,
 	appendPolicyWarningEntry,
 	appendSettingWarningEntry,
+	registerTranscriptRenderers,
 	createAliasTargetsEntry,
 	formatAliasTargetsEntry,
 	formatPolicyWarning,
@@ -83,6 +84,20 @@ test("formats and appends a durable setting warning", () => {
 		{ log: () => undefined },
 	);
 	assert.deepEqual(entries, [{ type: SETTING_WARNING_ENTRY, data: settingWarning }]);
+});
+
+test("renders expanded latency and failover entries", () => {
+	const renderers = new Map<string, any>();
+	registerTranscriptRenderers({ registerEntryRenderer(type: string, renderer: any) { renderers.set(type, renderer); } } as never);
+	const theme = { fg: (_c: string, text: string) => text, bg: (_c: string, text: string) => text };
+	const report = { samples: [], legacyTimeouts: [], targetSummaries: [], roleSummaries: [], suggestedRoles: {} };
+	renderers.get("model-alias-latency-report")({ data: { report }, }, { expanded: true }, theme);
+	renderers.get("model-alias-failover")({ data: { role: "r", failedTarget: "p/m", reason: undefined, cooldownMs: 1, failCount: 1, timestamp: 1 } }, { expanded: true }, theme);
+	for (const type of ["model-alias-config-warning", "model-alias-setting-warning", "model-alias-policy-warning"]) {
+		renderers.get(type)({ data: {} }, { expanded: false }, theme);
+	}
+	renderers.get("model-alias-setting-warning")({ data: { setting: "s" } }, { expanded: false }, theme);
+	renderers.get("model-alias-policy-warning")({ data: { role: "r" } }, { expanded: false }, theme);
 });
 
 test("logs append failures without interrupting policy fallback", () => {

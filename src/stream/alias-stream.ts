@@ -34,6 +34,7 @@ type StreamKind = keyof Pick<ProviderStreams, "stream" | "streamSimple">;
 
 interface AliasStreamDependencies {
 	aliases: AliasMap;
+	timers?: import("../fallback/types.ts").TimerApi;
 	/** Re-read per stream so every process follows the current shared rules. */
 	policyFor(role: string): PolicyLoad;
 	aliasModels: Model<Api>[];
@@ -91,6 +92,7 @@ function createFallbackStream(
 		targets,
 		cooldowns,
 		policy,
+		timers: dependencies.timers,
 		signal: options?.signal,
 		open: async (targetRef, attemptSignal) => {
 			try {

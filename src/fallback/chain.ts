@@ -37,7 +37,7 @@ interface AttemptWatchdog {
 	disarm(): void;
 }
 
-const DEFAULT_TIMERS: TimerApi = {
+export const DEFAULT_TIMERS: TimerApi = {
 	setTimeout(callback, delayMs) {
 		return setTimeout(callback, delayMs);
 	},

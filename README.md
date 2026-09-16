@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/pi-model-fallback-alias)](https://www.npmjs.com/package/pi-model-fallback-alias)
 [![npm downloads](https://img.shields.io/npm/dm/pi-model-fallback-alias)](https://www.npmjs.com/package/pi-model-fallback-alias)
 [![CI](https://img.shields.io/github/actions/workflow/status/unrelentingfox/pi-model-fallback-alias/ci.yml?branch=main&label=CI)](https://github.com/unrelentingfox/pi-model-fallback-alias/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/unrelentingfox/pi-model-fallback-alias/graph/badge.svg)](https://app.codecov.io/gh/unrelentingfox/pi-model-fallback-alias)
 [![Node.js](https://img.shields.io/node/v/pi-model-fallback-alias)](https://www.npmjs.com/package/pi-model-fallback-alias)
 [![License](https://img.shields.io/github/license/unrelentingfox/pi-model-fallback-alias)](https://github.com/unrelentingfox/pi-model-fallback-alias/blob/main/LICENSE)
 
@@ -186,7 +187,12 @@ npm ci
 npm run check
 ```
 
-`npm run check` runs tests, type checking, and package validation. Development
+`npm run check` runs the test suite under c8 with all production TypeScript files
+included, enforces 95% statements, lines, functions, and branches, writes text
+and `coverage/lcov.info` reports, then runs type checking and package validation.
+The only narrow coverage exclusion is `src/fallback/types.ts`, which contains
+TypeScript type declarations only and emits no executable JavaScript.
+Generated coverage output is ignored by Git. Development
 dependencies pin `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`
 to 0.84.4, and `@earendil-works/pi-tui` to 0.85.1. Runtime Pi packages remain
 optional wildcard peer dependencies because Pi supplies them when loading the

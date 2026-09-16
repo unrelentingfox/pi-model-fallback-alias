@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, test } from "node:test";
 import {
 	renderStatusTick,
 	startSession,
@@ -183,6 +183,9 @@ describe("renderStatusTick", () => {
 		});
 
 		assert.equal(text, "provider/primary · cooldown: provider/primary 1m, provider/secondary 1m");
+		const missing = createSession();
+		missing.model = { provider: "alias", id: "missing" };
+		assert.equal(renderStatusTick({ aliases: new Map(), session: missing, lastPushedText: undefined, now: 1_000, cooldowns: { state: () => undefined }, debugLog: NOOP_DEBUG_LOG }), undefined);
 	});
 
 	it("removes only the current model status when a non-alias model is selected", () => {
@@ -307,4 +310,12 @@ describe("renderStatusTick", () => {
 		assert.match(captured.statuses[1] ?? "", /model/);
 		assert.equal(captured.statuses[2], undefined);
 	});
+});
+
+test("keeps previous status when status publishing throws", () => {
+	const session = createSession();
+	session.hasUI = true;
+	session.model = { provider: "alias", id: "fast" };
+	session.ui = { setStatus() { throw new Error("ui unavailable"); }, theme: { fg: (_c: "muted" | "warning", t: string) => t } };
+	assert.equal(renderStatusTick({ aliases: new Map([["fast", ["provider/model"]]]), session, lastPushedText: "old", cooldowns: { state: () => undefined }, debugLog: NOOP_DEBUG_LOG }), "old");
 });
