@@ -49,12 +49,12 @@ export function readAliasConfig(path: string, readConfig: (path: string) => stri
 	return parseAliasConfig(JSON.parse(readConfig(path)) as unknown);
 }
 
-export function loadAliasConfig(debugLog: DebugLog): AliasConfig {
+export function loadAliasConfig(debugLog: DebugLog, path = MAP_PATH): AliasConfig {
 	try {
-		return readAliasConfig(MAP_PATH);
+		return readAliasConfig(path);
 	} catch (error) {
-		debugLog.log("alias-map-error", { mapPath: MAP_PATH, message: describeFailure(error) });
-		console.warn(`[pi-model-alias] No aliases registered; could not load ${MAP_PATH}: ${describeFailure(error)}`);
+		debugLog.log("alias-map-error", { mapPath: path, message: describeFailure(error) });
+		console.warn(`[pi-model-alias] No aliases registered; could not load ${path}: ${describeFailure(error)}`);
 		return EMPTY_CONFIG;
 	}
 }

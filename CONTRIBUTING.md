@@ -4,8 +4,16 @@
 2. Run `npm ci`.
 3. Optional: run `npm run hooks:install` to enable the tracked Git hooks.
    This replaces any existing `core.hooksPath` for the clone.
-4. Run `npm run check` before opening a pull request.
+4. Run `npm run check` before opening a pull request. This includes the enforced
+   c8 coverage gate for every executable production TypeScript file (`index.ts`
+   and `src/**/*.ts`), with 95% statements, lines, functions, and branches.
+   The only exclusion is `src/fallback/types.ts`, a type-only module with no
+   emitted JavaScript; do not add exclusions for executable code.
 5. Keep model examples provider-neutral and never commit credentials or runtime state.
+
+Coverage reports are generated under `coverage/` and are intentionally ignored.
+Use `npm run coverage` for the coverage-only gate; it writes text output and
+`coverage/lcov.info`.
 
 ## Commit messages
 

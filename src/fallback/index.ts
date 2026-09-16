@@ -41,4 +41,4 @@ export {
 	resolveTargetReference,
 } from "./refs.ts";
 
-export { runFallbackChain } from "./chain.ts";
+export { DEFAULT_TIMERS, runFallbackChain } from "./chain.ts";
