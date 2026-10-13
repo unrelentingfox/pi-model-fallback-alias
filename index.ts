@@ -10,6 +10,7 @@ import { createDebugLog, type DebugLog } from "./src/debug-log.ts";
 import { describeFailure, type AliasConfig, type CooldownRegistry } from "./src/fallback/index.ts";
 import { EXTENSION_LATENCY_LOG_PATH, expandLogPaths, readLatencyLog } from "./src/latency/log.ts";
 import { createLatencyReport, createLatencyReportEntry } from "./src/latency/report.ts";
+import { aliasSessionSlot, type AliasSessionSlot } from "./src/session-slot.ts";
 import { renderStatusTick, startSession, type AliasSession as StatusSession } from "./src/status/session-status.ts";
 import {
 	appendAliasTargetsEntry,
@@ -42,6 +43,8 @@ export interface PiModelAliasDependencies {
 	debugLog?: DebugLog;
 	cooldowns?: CooldownRegistry;
 	timers?: import("./src/fallback/types.ts").TimerApi;
+	/** Defaults to the slot shared by every copy of the extension in this process. */
+	sessionSlot?: AliasSessionSlot;
 }
 
 export default function piModelAlias(pi: ExtensionAPI): void {
@@ -58,10 +61,28 @@ export function installPiModelAlias(pi: ExtensionAPI, dependencies: PiModelAlias
 	debugLog.log("extension-load", { mapPath: MAP_PATH, aliases: [...aliases.keys()] });
 	if (aliases.size === 0) return;
 
+	const sessionSlot = dependencies.sessionSlot ?? aliasSessionSlot();
+	// A bound copy keeps its own registry; only a copy that never receives
+	// session_start falls back to the process-wide slot (see AliasSessionSlot).
+	let bound = false;
+	let ownRegistry: Registry | undefined;
+	let ownHasUI = false;
 	const session: AliasSession = {
-		registry: undefined,
+		get registry() {
+			return bound ? ownRegistry : sessionSlot.registry;
+		},
+		set registry(value) {
+			bound = true;
+			ownRegistry = value;
+		},
 		ui: undefined,
-		hasUI: false,
+		// stderr is shared by the whole process, so any bound UI keeps warnings off it.
+		get hasUI() {
+			return ownHasUI || sessionSlot.hasUI;
+		},
+		set hasUI(value) {
+			ownHasUI = value;
+		},
 		model: undefined,
 		activeTargets: new Map(),
 	};
@@ -133,6 +154,10 @@ export function installPiModelAlias(pi: ExtensionAPI, dependencies: PiModelAlias
 
 	pi.on("session_start", (_event, ctx) => {
 		session.model = ctx.model;
+		// Publish for unbound copies. A headless session must not replace the
+		// registry of an interactive session that is already bound.
+		if (ctx.hasUI || !sessionSlot.hasUI) sessionSlot.registry = ctx.modelRegistry;
+		if (ctx.hasUI) sessionSlot.hasUI = true;
 		if (startSession(session, ctx, debugLog)) {
 			lastPushedText = undefined;
 			startStatusRefresh();
