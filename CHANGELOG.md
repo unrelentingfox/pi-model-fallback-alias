@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/unrelentingfox/pi-model-fallback-alias/compare/v0.2.0...v0.2.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* share bound session state across extension copies in one process ([#30](https://github.com/unrelentingfox/pi-model-fallback-alias/issues/30)) ([f7e12b8](https://github.com/unrelentingfox/pi-model-fallback-alias/commit/f7e12b8c2f3631227d3664d34249cf70a9d559d2))
+
 ## [0.2.0](https://github.com/unrelentingfox/pi-model-fallback-alias/compare/v0.1.1...v0.2.0) (2026-09-15)
 
 
