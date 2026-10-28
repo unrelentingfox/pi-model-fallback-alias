@@ -50,8 +50,20 @@ export async function runFallbackChain<Event extends StreamEventLike>(options: F
 	if (options.targets.length === 0) {
 		throw new Error(`Model alias "${options.role}" has no usable targets after config expansion`);
 	}
+	let started = false;
+	const forward = options.forward;
+	options = {
+		...options,
+		forward(event) {
+			if (event.type === "start") {
+				if (started) return;
+				started = true;
+			}
+			return forward(event);
+		},
+	};
 	const cooldowns = options.cooldowns ?? createCooldownRegistry();
-	if (options.targets.length === 1) {
+	if (options.targets.length === 1 && !options.policy?.streamThinkingBeforeCommit) {
 		await forwardSingleTarget(options, options.targets[0]!, cooldowns);
 		return;
 	}
@@ -65,6 +77,7 @@ export async function runFallbackChain<Event extends StreamEventLike>(options: F
 		if (outcome.kind === "complete" || outcome.kind === "committed-failure") return;
 		if (outcome.kind === "unsafe-throw") throw outcome.error;
 
+		await options.onAttemptAbandoned?.();
 		failures.push({
 			target: attempt.target,
 			reason: outcome.reason,
@@ -182,7 +195,7 @@ async function attemptTarget<Event extends StreamEventLike>(
 			// Once committed, a stale fire must never win the race: failover is no longer possible.
 			const racing = watchdog !== undefined && !committed;
 			const result = racing ? await Promise.race([next, watchdog!.expired.then(() => undefined)]) : await next;
-			if (racing && watchdog!.fired) {
+			if (racing && watchdog!.fired && !options.signal?.aborted) {
 				void next.catch(() => undefined);
 				void iterator.return?.().catch(() => undefined);
 				const reason = timeoutReason(watchdog.fired, timeouts!);
@@ -204,6 +217,7 @@ async function attemptTarget<Event extends StreamEventLike>(
 				return { kind: "complete" };
 			}
 			if (isFailureEvent(event)) {
+				if (options.signal?.aborted) throw new Error("stream aborted");
 				latency.recordUsage(event);
 				watchdog?.disarm();
 				if (committed) {
@@ -216,7 +230,8 @@ async function attemptTarget<Event extends StreamEventLike>(
 				return { kind: "retryable-failure", reason: failureEventReason(event) };
 			}
 			if (!committed && isSafePrefixEvent(event)) {
-				buffered.push(options.snapshot?.(event) ?? event);
+				if (options.policy?.streamThinkingBeforeCommit) await options.forward(event);
+				else buffered.push(options.snapshot?.(event) ?? event);
 				continue;
 			}
 			if (!committed) {
@@ -228,12 +243,13 @@ async function attemptTarget<Event extends StreamEventLike>(
 			await options.forward(event);
 		}
 		watchdog?.disarm();
+		if (options.signal?.aborted) throw new Error("stream aborted");
 		const reason = "stream ended without a terminal event";
 		outcome = committed ? "unsafe-throw" : "retryable-failure";
 		return committed ? { kind: "unsafe-throw", error: new Error(reason) } : { kind: "retryable-failure", reason };
 	} catch (error) {
 		watchdog?.disarm();
-		if (watchdog?.fired && !committed) {
+		if (watchdog?.fired && !committed && !options.signal?.aborted) {
 			const reason = timeoutReason(watchdog.fired, timeouts!);
 			options.onTimeout?.(target, reason);
 			outcome = "timeout";
