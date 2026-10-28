@@ -86,6 +86,8 @@ function createFallbackStream(
 	const { policy, configLoadMs, degraded } = policyFor(aliasModel.id);
 	const metadataByTarget = new Map<string, ProviderResponseMetadata>();
 	let lastPartial: AssistantMessage | undefined;
+	const relay = createThinkingRelay(output);
+	const liveThinking = policy.streamThinkingBeforeCommit === true;
 
 	void runFallbackChain({
 		role: aliasModel.id,
@@ -121,9 +123,14 @@ function createFallbackStream(
 			}
 		},
 		forward: (event) => {
-			const forwarded = withAliasIdentity(event, aliasModel);
+			const forwarded = withAliasIdentity(liveThinking ? structuredClone(event) : event, aliasModel);
 			lastPartial = partialFrom(forwarded) ?? lastPartial;
-			output.push(forwarded);
+			if (liveThinking) relay.forward(forwarded);
+			else output.push(forwarded);
+		},
+		onAttemptAbandoned: () => {
+			if (liveThinking) relay.abandon();
+			lastPartial = undefined;
 		},
 		// configLoadMs and configDegraded ride the existing record; a separate event
 		// would add one more synchronous append per stream.
@@ -146,12 +153,68 @@ function createFallbackStream(
 				timestamp: Date.now(),
 				...metadataByTarget.get(failedTarget),
 			}),
-		// Pi treats a restart as a second assistant message, so safe prefixes stay hidden until commit.
+		// Buffered events must not share the provider's mutable partial.
 		snapshot: (event) => structuredClone(event),
 	})
 		.then(() => output.end())
-		.catch((error) => endWithError(output, aliasModel, error, lastPartial, options?.signal));
+		.catch((error) => {
+			if (liveThinking) relay.close();
+			endWithError(output, aliasModel, error, lastPartial, options?.signal);
+		});
 	return output;
+}
+
+function createThinkingRelay(
+	output: AssistantMessageEventStream,
+): { forward(event: AssistantMessageEvent): void; abandon(): void; close(): void } {
+	let offset = 0;
+	let nextIndex = 0;
+	let partial: AssistantMessage | undefined;
+	const openThinking = new Set<number>();
+	const padding = (length: number): AssistantMessage["content"] =>
+		Array.from({ length }, () => ({ type: "thinking", thinking: "" }));
+	const close = () => {
+		for (const contentIndex of openThinking) {
+			const block = partial!.content[contentIndex];
+			output.push({
+				type: "thinking_end", contentIndex,
+				content: block.type === "thinking" ? block.thinking : "", partial: partial!,
+			});
+		}
+		openThinking.clear();
+	};
+	return {
+		forward(event) {
+			if (event.type === "done" || event.type === "error") {
+				close();
+				output.push(event);
+				return;
+			}
+			partial = { ...event.partial, content: [...padding(offset), ...event.partial.content] };
+			nextIndex = Math.max(nextIndex, partial.content.length);
+			if ("contentIndex" in event) {
+				const contentIndex = offset + event.contentIndex;
+				nextIndex = Math.max(nextIndex, contentIndex + 1);
+				if (event.type === "thinking_start") openThinking.add(contentIndex);
+				if (event.type === "thinking_end") openThinking.delete(contentIndex);
+				output.push({ ...event, contentIndex, partial });
+			} else output.push({ ...event, partial });
+		},
+		abandon() {
+			if (partial && nextIndex > offset) {
+				// Fresh indexes isolate contentIndex-keyed downstream restoration buffers.
+				const cleared = { ...partial, content: padding(nextIndex) };
+				close();
+				const contentIndex = nextIndex++;
+				cleared.content.push({ type: "thinking", thinking: "" });
+				output.push({ type: "thinking_start", contentIndex, partial: cleared });
+				output.push({ type: "thinking_end", contentIndex, content: "", partial: cleared });
+			}
+			offset = nextIndex;
+			partial = undefined;
+		},
+		close,
+	};
 }
 
 function openTargetStream(

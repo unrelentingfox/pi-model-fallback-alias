@@ -26,12 +26,14 @@ export interface CooldownPolicy {
 
 /** Fully resolved policy: built-in defaults, then `$defaults`, then alias overrides. */
 export interface AliasPolicy {
+	streamThinkingBeforeCommit?: boolean;
 	timeouts?: AttemptTimeouts;
 	cooldown: CooldownPolicy;
 }
 
 /** Partial policy as written in `$defaults` or an object-form alias entry. */
 export interface AliasPolicyInput {
+	streamThinkingBeforeCommit?: boolean;
 	timeouts?: AttemptTimeouts;
 	cooldown?: Partial<CooldownPolicy>;
 }
@@ -123,6 +125,7 @@ export interface FallbackOptions<Event extends StreamEventLike> {
 	forward(event: Event): void | Promise<void>;
 	warn(failedTarget: string, reason: string, nextTarget: string | undefined, cooldown: CooldownUpdate): void;
 	snapshot?(event: Event): Event;
+	onAttemptAbandoned?(): void | Promise<void>;
 	timers?: TimerApi;
 	now?: () => number;
 	onLatency?(sample: AttemptLatencySample): void;

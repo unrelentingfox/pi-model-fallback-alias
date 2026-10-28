@@ -9,6 +9,24 @@ import {
 	type AliasConfig,
 } from "../src/fallback/index.ts";
 
+test("streamThinkingBeforeCommit inherits defaults and permits per-alias overrides", () => {
+	const config = parseAliasConfig({
+		$defaults: { streamThinkingBeforeCommit: true },
+		inherited: "provider/model", disabled: { targets: "provider/model", streamThinkingBeforeCommit: false },
+	});
+	assert.equal(config.policyFor("inherited").streamThinkingBeforeCommit, true);
+	assert.equal(config.policyFor("disabled").streamThinkingBeforeCommit, false);
+	assert.equal(parseAliasConfig({ coder: "provider/model" }).policyFor("coder").streamThinkingBeforeCommit ?? false, false);
+	assert.equal(parseAliasConfig({ coder: { targets: "provider/model", streamThinkingBeforeCommit: true } }).policyFor("coder").streamThinkingBeforeCommit, true);
+});
+
+test("streamThinkingBeforeCommit rejects non-boolean defaults and alias policies", () => {
+	for (const value of [null, 0, 1, "true", {}, []]) {
+		assert.throws(() => parseAliasConfig({ $defaults: { streamThinkingBeforeCommit: value }, coder: "provider/model" }), /must be a boolean/);
+		assert.throws(() => parseAliasConfig({ coder: { targets: "provider/model", streamThinkingBeforeCommit: value } }), /must be a boolean/);
+	}
+});
+
 const PATH = "/fake/model-alias.json";
 
 function configText(resetSuccesses: number, targets: readonly string[] = ["provider/first"]): string {
