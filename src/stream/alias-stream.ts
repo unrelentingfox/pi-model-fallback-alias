@@ -86,8 +86,7 @@ function createFallbackStream(
 	const { policy, configLoadMs, degraded } = policyFor(aliasModel.id);
 	const metadataByTarget = new Map<string, ProviderResponseMetadata>();
 	let lastPartial: AssistantMessage | undefined;
-	const relay = createThinkingRelay(output);
-	const liveThinking = policy.streamThinkingBeforeCommit === true;
+	const relay = policy.streamThinkingBeforeCommit ? createThinkingRelay(output) : undefined;
 
 	void runFallbackChain({
 		role: aliasModel.id,
@@ -123,13 +122,13 @@ function createFallbackStream(
 			}
 		},
 		forward: (event) => {
-			const forwarded = withAliasIdentity(liveThinking ? structuredClone(event) : event, aliasModel);
+			const forwarded = withAliasIdentity(relay ? structuredClone(event) : event, aliasModel);
 			lastPartial = partialFrom(forwarded) ?? lastPartial;
-			if (liveThinking) relay.forward(forwarded);
+			if (relay) relay.forward(forwarded);
 			else output.push(forwarded);
 		},
 		onAttemptAbandoned: () => {
-			if (liveThinking) relay.abandon();
+			relay?.abandon();
 			lastPartial = undefined;
 		},
 		// configLoadMs and configDegraded ride the existing record; a separate event
@@ -158,7 +157,7 @@ function createFallbackStream(
 	})
 		.then(() => output.end())
 		.catch((error) => {
-			if (liveThinking) relay.close();
+			relay?.close();
 			endWithError(output, aliasModel, error, lastPartial, options?.signal);
 		});
 	return output;
@@ -171,50 +170,53 @@ function createThinkingRelay(
 	let nextIndex = 0;
 	let partial: AssistantMessage | undefined;
 	const openThinking = new Set<number>();
-	const padding = (length: number): AssistantMessage["content"] =>
-		Array.from({ length }, () => ({ type: "thinking", thinking: "" }));
-	const close = () => {
+	return { forward, abandon, close };
+
+	function forward(event: AssistantMessageEvent): void {
+		if (event.type === "done" || event.type === "error") {
+			close();
+			output.push(event);
+			return;
+		}
+		partial = { ...event.partial, content: [...emptyThinkingBlocks(offset), ...event.partial.content] };
+		nextIndex = Math.max(nextIndex, partial.content.length);
+		if ("contentIndex" in event) {
+			const contentIndex = offset + event.contentIndex;
+			nextIndex = Math.max(nextIndex, contentIndex + 1);
+			if (event.type === "thinking_start") openThinking.add(contentIndex);
+			if (event.type === "thinking_end") openThinking.delete(contentIndex);
+			output.push({ ...event, contentIndex, partial });
+		} else output.push({ ...event, partial });
+	}
+
+	function abandon(): void {
+		close();
+		if (partial && nextIndex > offset) {
+			// Fresh indexes isolate contentIndex-keyed downstream restoration buffers.
+			const contentIndex = nextIndex++;
+			const cleared = { ...partial, content: emptyThinkingBlocks(nextIndex) };
+			output.push({ type: "thinking_start", contentIndex, partial: cleared });
+			output.push({ type: "thinking_end", contentIndex, content: "", partial: cleared });
+		}
+		offset = nextIndex;
+		partial = undefined;
+	}
+
+	function close(): void {
+		if (!partial) return;
 		for (const contentIndex of openThinking) {
-			const block = partial!.content[contentIndex];
+			const block = partial.content[contentIndex];
 			output.push({
 				type: "thinking_end", contentIndex,
-				content: block.type === "thinking" ? block.thinking : "", partial: partial!,
+				content: block.type === "thinking" ? block.thinking : "", partial,
 			});
 		}
 		openThinking.clear();
-	};
-	return {
-		forward(event) {
-			if (event.type === "done" || event.type === "error") {
-				close();
-				output.push(event);
-				return;
-			}
-			partial = { ...event.partial, content: [...padding(offset), ...event.partial.content] };
-			nextIndex = Math.max(nextIndex, partial.content.length);
-			if ("contentIndex" in event) {
-				const contentIndex = offset + event.contentIndex;
-				nextIndex = Math.max(nextIndex, contentIndex + 1);
-				if (event.type === "thinking_start") openThinking.add(contentIndex);
-				if (event.type === "thinking_end") openThinking.delete(contentIndex);
-				output.push({ ...event, contentIndex, partial });
-			} else output.push({ ...event, partial });
-		},
-		abandon() {
-			if (partial && nextIndex > offset) {
-				// Fresh indexes isolate contentIndex-keyed downstream restoration buffers.
-				const cleared = { ...partial, content: padding(nextIndex) };
-				close();
-				const contentIndex = nextIndex++;
-				cleared.content.push({ type: "thinking", thinking: "" });
-				output.push({ type: "thinking_start", contentIndex, partial: cleared });
-				output.push({ type: "thinking_end", contentIndex, content: "", partial: cleared });
-			}
-			offset = nextIndex;
-			partial = undefined;
-		},
-		close,
-	};
+	}
+}
+
+function emptyThinkingBlocks(length: number): AssistantMessage["content"] {
+	return Array.from({ length }, () => ({ type: "thinking", thinking: "" }));
 }
 
 function openTargetStream(
