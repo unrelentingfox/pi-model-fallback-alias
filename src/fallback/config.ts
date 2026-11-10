@@ -47,12 +47,17 @@ function resolvePolicy(role: string, base: AliasPolicy, overrides: AliasPolicyIn
 		}
 		cooldown.baseMs = cooldown.capMs;
 	}
-	return { ...(timeouts ? { timeouts } : {}), cooldown };
+	const streamThinkingBeforeCommit = overrides.streamThinkingBeforeCommit ?? base.streamThinkingBeforeCommit;
+	return {
+		...(streamThinkingBeforeCommit === undefined ? {} : { streamThinkingBeforeCommit }),
+		...(timeouts ? { timeouts } : {}),
+		cooldown,
+	};
 }
 
 function parseDefaultsPolicy(value: unknown): AliasPolicyInput {
 	if (value === undefined) return {};
-	const validKeys = new Set(["timeouts", "cooldown", "cooldownResetSuccesses"]);
+	const validKeys = new Set(["timeouts", "cooldown", "cooldownResetSuccesses", "streamThinkingBeforeCommit"]);
 	if (!isRecord(value) || Object.keys(value).some((key) => !validKeys.has(key))) {
 		throw new Error('invalid mapping for "$defaults"');
 	}
@@ -107,7 +112,7 @@ function invalidSettings(setting: string, reason: string): {
 function parseRoleConfig(role: string, value: unknown): { targets: readonly string[]; policy: AliasPolicyInput } {
 	if (!role) throw new Error('invalid mapping for ""');
 	if (!isRecord(value)) return { targets: normalizeTargets(role, value), policy: {} };
-	const validKeys = new Set(["targets", "timeouts", "cooldown"]);
+	const validKeys = new Set(["targets", "timeouts", "cooldown", "streamThinkingBeforeCommit"]);
 	if (Object.keys(value).some((key) => !validKeys.has(key)) || !("targets" in value)) {
 		throw new Error(`invalid mapping for "${role}"`);
 	}
@@ -115,7 +120,13 @@ function parseRoleConfig(role: string, value: unknown): { targets: readonly stri
 }
 
 function parsePolicyFields(role: string, value: Record<string, unknown>): AliasPolicyInput {
+	if (value.streamThinkingBeforeCommit !== undefined && typeof value.streamThinkingBeforeCommit !== "boolean") {
+		throw new Error(`invalid mapping for "${role}": streamThinkingBeforeCommit must be a boolean`);
+	}
 	return {
+		...(value.streamThinkingBeforeCommit === undefined
+			? {}
+			: { streamThinkingBeforeCommit: value.streamThinkingBeforeCommit as boolean }),
 		timeouts: parseTimeouts(role, value.timeouts),
 		cooldown: parseCooldown(role, value.cooldown),
 	};

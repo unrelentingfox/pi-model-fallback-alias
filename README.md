@@ -55,7 +55,27 @@ Aliases live in `<agent-dir>/model-alias.json`, normally
 ```
 
 Each key registers `alias/<key>` as a Pi model. A value can be a model string,
-an ordered array, or an object with `targets`, `timeouts`, and `cooldown`.
+an ordered array, or an object with `targets`, `timeouts`, `cooldown`, and
+`streamThinkingBeforeCommit`.
+
+`streamThinkingBeforeCommit` is an optional boolean, defaulting to `false`.
+Set it in `$defaults` to enable live thinking for all aliases, or in an
+object-form alias to override that default:
+
+```json
+{
+  "$defaults": { "streamThinkingBeforeCommit": true },
+  "coder": ["provider-a/model-primary", "provider-b/model-secondary"],
+  "quiet": { "targets": ["provider-c/model"], "streamThinkingBeforeCommit": false }
+}
+```
+
+When enabled, start and thinking events are visible immediately, but only text
+or tool output commits the attempt. A failure or pre-commit timeout can still
+switch targets. Abandoned thinking disappears on fallback and is not saved in
+the final assistant message or sent in later model context. The stream emits
+one public start and one terminal event; final content belongs only to the last
+target. This does not reclassify prose as thinking or combine thinking with text.
 
 `timeouts` applies while another target remains:
 
@@ -73,9 +93,9 @@ Set `$settings.statusRefreshMs` to control how often the footer rechecks shared
 cooldown state. It defaults to 2000 milliseconds and must be an integer from 1
 to 60000. Invalid settings warn and use the default without disabling aliases.
 `$settings` and alias definitions, including target chains, load on `/reload`.
-Model selection and failover refresh the footer immediately. Timeout and cooldown
-policy fields are re-read at the start of each stream; if the current map is
-invalid, the alias uses its last valid policy and emits a warning.
+Model selection and failover refresh the footer immediately. Timeout, cooldown,
+and live-thinking policy fields are re-read at the start of each stream; if the
+current map is invalid, the alias uses its last valid policy and emits a warning.
 
 Nested aliases are flattened at load time. Loops are allowed and collapse during
 expansion. Duplicate concrete targets keep their first position in each flattened
@@ -97,8 +117,8 @@ Use an alias anywhere Pi accepts a model reference:
 - Failover advances on resolution, authentication, connection, and HTTP errors
   until output commits. It never swaps providers after text or tool output is
   visible.
-- Start and thinking events are buffered before commit, so a failed attempt
-  cannot leave partial protocol state behind.
+- By default, start and thinking events are buffered before commit. Enable
+  `streamThinkingBeforeCommit` to show thinking while keeping pre-output failover.
 - Failed concrete targets enter an exponential cooldown. State is shared by
   aliases and Pi processes. Cooled targets are skipped while alternatives
   remain and retried before final exhaustion.
