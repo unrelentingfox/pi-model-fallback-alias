@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/unrelentingfox/pi-model-fallback-alias/compare/v0.2.1...v0.3.0) (2026-11-10)
+
+
+### Features
+
+* stream thinking before fallback commits ([#36](https://github.com/unrelentingfox/pi-model-fallback-alias/issues/36)) ([3cba525](https://github.com/unrelentingfox/pi-model-fallback-alias/commit/3cba525d989f8d85a61e9c7b56513a0a7ce3bd42))
+
 ## [0.2.1](https://github.com/unrelentingfox/pi-model-fallback-alias/compare/v0.2.0...v0.2.1) (2026-10-13)
 
 
